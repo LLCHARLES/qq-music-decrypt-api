@@ -1,5 +1,3 @@
-# api/lyrics.py - 与C#代码完全一致的版本
-
 from flask import Flask, request, jsonify, make_response
 import urllib.request
 import urllib.parse
@@ -339,10 +337,6 @@ def triple_des_crypt(input_bytes, schedule):
     
     return output
 
-
-
-# ... [DES算法实现部分保持不变，与之前完全一样] ...
-
 # ================ QQ 音乐解密核心 ================
 # QQ Music 密钥
 QQ_KEY = b'!@#)(*$%123ZXC!@!@#)(NHL'
@@ -365,7 +359,7 @@ def decrypt_qq_lyric(encrypted_hex):
         # 5. Zlib解压
         decompressed = zlib.decompress(decrypted_data)
         
-        # 6. 返回UTF-8字符串（与C#完全一致，不做任何格式化）
+        # 6. 返回UTF-8字符串
         return decompressed.decode('utf-8')
         
     except Exception as e:
@@ -388,25 +382,62 @@ def remove_illegal_xml_content(content):
         i += 1
     return content.strip()
 
+def extract_lyric_from_xml(decrypted_text):
+    """从XML中提取歌词内容 - 对应C#代码中解析XML并获取LyricContent的逻辑"""
+    if not decrypted_text or '<?xml' not in decrypted_text:
+        return decrypted_text
+    
+    try:
+        # 移除可能的BOM字符
+        if decrypted_text.startswith('\ufeff'):
+            decrypted_text = decrypted_text[1:]
+        
+        # 修复XML中的非法内容
+        decrypted_text = remove_illegal_xml_content(decrypted_text)
+        
+        # 解析XML
+        root = ET.fromstring(decrypted_text)
+        
+        # 查找Lyric_1节点
+        for elem in root.iter():
+            if elem.tag == 'Lyric_1':
+                lyric_content = elem.get('LyricContent')
+                if lyric_content:
+                    return lyric_content
+        
+        # 如果没有找到Lyric_1节点，尝试其他方式
+        # 查找包含歌词内容的节点
+        for elem in root.iter():
+            if 'LyricContent' in elem.attrib:
+                return elem.attrib['LyricContent']
+        
+        # 如果都没有找到，返回原始文本
+        return decrypted_text
+        
+    except Exception as e:
+        print(f"解析XML失败: {e}")
+        # 解析失败，返回原始文本
+        return decrypted_text
+
 def parse_xml_content(xml_content):
-    """解析XML内容并提取歌词 - 与C#的Helper.GetLyricsAsync完全一致"""
-    # 移除注释（与C#一致）
+    """解析XML内容并提取歌词"""
+    # 移除注释
     xml_content = xml_content.replace('<!--', '').replace('-->', '')
     
-    # 移除非法内容（与C#一致）
+    # 移除非法内容
     xml_content = remove_illegal_xml_content(xml_content)
     
     try:
-        # 修复&符号（与C#的ReplaceAmp一致）
+        # 修复&符号
         xml_content = re.sub(r'&(?![a-zA-Z]{2,6};|#[0-9]{2,4};)', '&amp;', xml_content)
         
         # 解析XML
         root = ET.fromstring(xml_content)
         
-        # 查找歌词节点（与C#的VerbatimXmlMappingDict映射一致）
+        # 查找歌词节点
         result = {'lyrics': '', 'trans': ''}
         
-        # 递归查找节点（简化版，与C#的XmlUtils.RecursionFindElement逻辑一致）
+        # 递归查找节点
         def find_nodes(node, tag_name):
             """递归查找指定标签的节点"""
             if node.tag == tag_name:
@@ -421,7 +452,9 @@ def parse_xml_content(xml_content):
         content_node = find_nodes(root, 'content')
         if content_node is not None and content_node.text:
             try:
-                result['lyrics'] = decrypt_qq_lyric(content_node.text.strip())
+                decrypted_text = decrypt_qq_lyric(content_node.text.strip())
+                # 如果解密后的文本是XML格式，提取LyricContent
+                result['lyrics'] = extract_lyric_from_xml(decrypted_text)
             except Exception as e:
                 print(f"解密原文歌词失败: {e}")
                 result['lyrics'] = ''
@@ -430,7 +463,9 @@ def parse_xml_content(xml_content):
         contentts_node = find_nodes(root, 'contentts')
         if contentts_node is not None and contentts_node.text:
             try:
-                result['trans'] = decrypt_qq_lyric(contentts_node.text.strip())
+                decrypted_text = decrypt_qq_lyric(contentts_node.text.strip())
+                # 翻译歌词通常不是XML格式，直接使用
+                result['trans'] = decrypted_text
             except Exception as e:
                 print(f"解密翻译歌词失败: {e}")
                 result['trans'] = ''
@@ -438,7 +473,7 @@ def parse_xml_content(xml_content):
         return result
         
     except Exception as e:
-        # XML解析失败，尝试使用正则表达式提取（降级处理）
+        # XML解析失败，尝试使用正则表达式提取
         print(f"XML解析失败，尝试正则匹配: {e}")
         return extract_content_with_regex(xml_content)
 
@@ -452,7 +487,8 @@ def extract_content_with_regex(xml_content):
         encrypted = content_match.group(1).strip()
         if encrypted:
             try:
-                result['lyrics'] = decrypt_qq_lyric(encrypted)
+                decrypted_text = decrypt_qq_lyric(encrypted)
+                result['lyrics'] = extract_lyric_from_xml(decrypted_text)
             except Exception as e:
                 print(f"解密原文歌词失败（正则）: {e}")
     
@@ -462,7 +498,8 @@ def extract_content_with_regex(xml_content):
         encrypted = contentts_match.group(1).strip()
         if encrypted:
             try:
-                result['trans'] = decrypt_qq_lyric(encrypted)
+                decrypted_text = decrypt_qq_lyric(encrypted)
+                result['trans'] = decrypted_text
             except Exception as e:
                 print(f"解密翻译歌词失败（正则）: {e}")
     
@@ -499,7 +536,7 @@ def get_song_by_mid(mid):
     with urllib.request.urlopen(req, timeout=10) as response:
         data = response.read().decode('utf-8')
         
-        # 移除JSONP包装（与C#一致）
+        # 移除JSONP包装
         if data.startswith(callback + '('):
             data = data[len(callback) + 1:-2]
         
@@ -529,7 +566,7 @@ def get_lyrics_by_musicid(musicid):
     with urllib.request.urlopen(req, timeout=10) as response:
         xml_content = response.read().decode('utf-8')
         
-        # 解析XML并解密歌词（与C#完全一致）
+        # 解析XML并解密歌词
         return parse_xml_content(xml_content)
 
 # ================ Flask 路由 ================
@@ -538,14 +575,14 @@ def index():
     return json_response({
         'name': 'QQ音乐歌词解密API',
         'version': '2.0.0',
-        'description': '与C#代码完全一致的实现',
+        'description': '修复了XML解析问题，正确提取LyricContent',
         'endpoints': {
             '/api/lyrics?musicid=<musicid>': '通过musicid获取歌词',
             '/api/lyrics/mid?mid=<mid>': '通过mid获取歌词',
             '/api/test': '测试接口',
             '/api/debug?hex=<hex>': '调试接口（直接解密）'
         },
-        'example': '/api/lyrics?musicid=213836590'
+        'example': '/api/lyrics?musicid=559981893'
     })
 
 @app.route('/api/lyrics', methods=['GET'])
@@ -557,7 +594,7 @@ def get_lyrics_by_id():
         return json_response({
             'success': False,
             'error': '缺少musicid参数',
-            'example': '/api/lyrics?musicid=213836590'
+            'example': '/api/lyrics?musicid=559981893'
         }, 400)
     
     try:
@@ -571,16 +608,15 @@ def get_lyrics_by_id():
                 'musicid': musicid
             }, 404)
         
-        # 获取歌词文本（与C#完全一致，不做任何格式化）
+        # 获取歌词文本
         lyrics = result.get('lyrics', '')
         translation = result.get('trans', '')
         
-        # 注意：C#代码没有处理BOM字符，但Python需要处理
-        # 为了完全一致，我们也不处理BOM字符
-        # if lyrics and lyrics.startswith('\ufeff'):
-        #     lyrics = lyrics[1:]
-        # if translation and translation.startswith('\ufeff'):
-        #     translation = translation[1:]
+        # 处理BOM字符
+        if lyrics and lyrics.startswith('\ufeff'):
+            lyrics = lyrics[1:]
+        if translation and translation.startswith('\ufeff'):
+            translation = translation[1:]
         
         return json_response({
             'success': True,
@@ -589,7 +625,7 @@ def get_lyrics_by_id():
             'translation': translation,
             'has_lyrics': bool(lyrics),
             'has_translation': bool(translation),
-            'note': '逐字歌词格式保持原样，与C#代码完全一致'
+            'note': '逐字歌词已从XML中正确提取'
         })
         
     except Exception as e:
@@ -638,9 +674,14 @@ def get_lyrics_by_mid():
         # 3. 通过musicid获取歌词
         result = get_lyrics_by_musicid(musicid)
         
-        # 获取歌词文本（与C#完全一致，不做任何格式化）
         lyrics = result.get('lyrics', '')
         translation = result.get('trans', '')
+        
+        # 处理BOM字符
+        if lyrics and lyrics.startswith('\ufeff'):
+            lyrics = lyrics[1:]
+        if translation and translation.startswith('\ufeff'):
+            translation = translation[1:]
         
         return json_response({
             'success': True,
@@ -657,7 +698,7 @@ def get_lyrics_by_mid():
                 'title': song_info.get('title', ''),
                 'singer': song_info.get('singer', [{}])[0].get('name', '') if song_info.get('singer') else ''
             },
-            'note': '逐字歌词格式保持原样，与C#代码完全一致'
+            'note': '逐字歌词已从XML中正确提取'
         })
         
     except Exception as e:
@@ -698,14 +739,20 @@ def debug():
     
     try:
         decrypted = decrypt_qq_lyric(hex_str)
-        return json_response({
+        extracted = extract_lyric_from_xml(decrypted)
+        
+        result = {
             'success': True,
             'original_length': len(hex_str),
             'decrypted_length': len(decrypted),
-            'decrypted': decrypted[:500] + '...' if len(decrypted) > 500 else decrypted,
+            'extracted_length': len(extracted),
             'is_xml': '<?xml' in decrypted[:20],
-            'note': '直接解密，不做任何格式化'
-        })
+            'was_extracted': extracted != decrypted,
+            'extracted_preview': extracted[:500] + '...' if len(extracted) > 500 else extracted,
+            'note': '如果is_xml为true且was_extracted为true，则表示成功从XML中提取了歌词'
+        }
+        
+        return json_response(result)
     except Exception as e:
         import traceback
         return json_response({
