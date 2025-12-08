@@ -1,3 +1,5 @@
+# api/lyrics.py - 与C#代码完全一致的版本
+
 from flask import Flask, request, jsonify, make_response
 import urllib.request
 import urllib.parse
@@ -337,6 +339,10 @@ def triple_des_crypt(input_bytes, schedule):
     
     return output
 
+
+
+# ... [DES算法实现部分保持不变，与之前完全一样] ...
+
 # ================ QQ 音乐解密核心 ================
 # QQ Music 密钥
 QQ_KEY = b'!@#)(*$%123ZXC!@!@#)(NHL'
@@ -357,44 +363,10 @@ def decrypt_qq_lyric(encrypted_hex):
         decrypted_data = triple_des_crypt(encrypted_bytes, schedule)
         
         # 5. Zlib解压
-        try:
-            decompressed = zlib.decompress(decrypted_data)
-        except zlib.error:
-            # 如果解压失败，可能是数据已经解密，直接使用
-            decompressed = decrypted_data
+        decompressed = zlib.decompress(decrypted_data)
         
-        # 6. 尝试多种编码解码，保留所有字符（包括控制字符）
-        result = None
-        
-        # 首先尝试UTF-8
-        try:
-            result = decompressed.decode('utf-8')
-        except UnicodeDecodeError:
-            pass
-        
-        # 如果UTF-8失败，尝试GBK/GB2312（QQ音乐可能使用中文编码）
-        if result is None:
-            try:
-                result = decompressed.decode('gbk')
-            except UnicodeDecodeError:
-                pass
-        
-        # 如果还是失败，使用replace模式忽略错误
-        if result is None:
-            try:
-                result = decompressed.decode('utf-8', errors='replace')
-            except:
-                # 最后尝试使用latin-1（不会失败）
-                result = decompressed.decode('latin-1')
-        
-        # 7. 修复换行符：确保 \r\n 和 \r 都被转换为 \n
-        result = result.replace('\r\n', '\n').replace('\r', '\n')
-        
-        # 8. 移除BOM字符（如果有）
-        if result.startswith('\ufeff'):
-            result = result[1:]
-        
-        return result
+        # 6. 返回UTF-8字符串（与C#完全一致，不做任何格式化）
+        return decompressed.decode('utf-8')
         
     except Exception as e:
         raise Exception(f"解密失败: {str(e)}")
@@ -417,68 +389,61 @@ def remove_illegal_xml_content(content):
     return content.strip()
 
 def parse_xml_content(xml_content):
-    """解析XML内容并提取歌词"""
-    # 移除注释
+    """解析XML内容并提取歌词 - 与C#的Helper.GetLyricsAsync完全一致"""
+    # 移除注释（与C#一致）
     xml_content = xml_content.replace('<!--', '').replace('-->', '')
     
-    # 移除非法内容
+    # 移除非法内容（与C#一致）
     xml_content = remove_illegal_xml_content(xml_content)
     
     try:
-        # 修复&符号
+        # 修复&符号（与C#的ReplaceAmp一致）
         xml_content = re.sub(r'&(?![a-zA-Z]{2,6};|#[0-9]{2,4};)', '&amp;', xml_content)
         
         # 解析XML
         root = ET.fromstring(xml_content)
         
-        # 查找歌词节点
+        # 查找歌词节点（与C#的VerbatimXmlMappingDict映射一致）
         result = {'lyrics': '', 'trans': ''}
         
-        # 递归查找节点
-        def find_nodes(node, path=''):
-            if node.tag in ['content', 'contentts', 'contentroma', 'Lyric_1']:
-                text = node.text or ''
-                if text.strip():
-                    try:
-                        decrypted = decrypt_qq_lyric(text.strip())
-                        
-                        # 检查是否是XML格式
-                        if '<?xml' in decrypted:
-                            try:
-                                sub_root = ET.fromstring(decrypted)
-                                # 查找Lyric_1节点
-                                for elem in sub_root.iter():
-                                    if elem.tag == 'Lyric_1':
-                                        lyric_content = elem.get('LyricContent')
-                                        if lyric_content:
-                                            return lyric_content
-                            except:
-                                pass
-                        return decrypted
-                    except:
-                        pass
-            
+        # 递归查找节点（简化版，与C#的XmlUtils.RecursionFindElement逻辑一致）
+        def find_nodes(node, tag_name):
+            """递归查找指定标签的节点"""
+            if node.tag == tag_name:
+                return node
             for child in node:
-                found = find_nodes(child, f"{path}/{node.tag}")
-                if found:
+                found = find_nodes(child, tag_name)
+                if found is not None:
                     return found
-            return ''
+            return None
         
-        # 查找原文和译文
-        for elem in root.iter():
-            if elem.tag == 'content':
-                result['lyrics'] = find_nodes(elem) or ''
-            elif elem.tag == 'contentts':
-                result['trans'] = find_nodes(elem) or ''
+        # 查找content标签（原文歌词）
+        content_node = find_nodes(root, 'content')
+        if content_node is not None and content_node.text:
+            try:
+                result['lyrics'] = decrypt_qq_lyric(content_node.text.strip())
+            except Exception as e:
+                print(f"解密原文歌词失败: {e}")
+                result['lyrics'] = ''
+        
+        # 查找contentts标签（翻译歌词）
+        contentts_node = find_nodes(root, 'contentts')
+        if contentts_node is not None and contentts_node.text:
+            try:
+                result['trans'] = decrypt_qq_lyric(contentts_node.text.strip())
+            except Exception as e:
+                print(f"解密翻译歌词失败: {e}")
+                result['trans'] = ''
         
         return result
         
     except Exception as e:
-        # 如果XML解析失败，尝试使用正则表达式提取
+        # XML解析失败，尝试使用正则表达式提取（降级处理）
+        print(f"XML解析失败，尝试正则匹配: {e}")
         return extract_content_with_regex(xml_content)
 
 def extract_content_with_regex(xml_content):
-    """使用正则表达式从XML中提取内容"""
+    """使用正则表达式从XML中提取内容（降级处理）"""
     result = {'lyrics': '', 'trans': ''}
     
     # 匹配<content>标签
@@ -488,8 +453,8 @@ def extract_content_with_regex(xml_content):
         if encrypted:
             try:
                 result['lyrics'] = decrypt_qq_lyric(encrypted)
-            except:
-                pass
+            except Exception as e:
+                print(f"解密原文歌词失败（正则）: {e}")
     
     # 匹配<contentts>标签
     contentts_match = re.search(r'<contentts>(.*?)</contentts>', xml_content, re.DOTALL)
@@ -498,8 +463,8 @@ def extract_content_with_regex(xml_content):
         if encrypted:
             try:
                 result['trans'] = decrypt_qq_lyric(encrypted)
-            except:
-                pass
+            except Exception as e:
+                print(f"解密翻译歌词失败（正则）: {e}")
     
     return result
 
@@ -534,7 +499,7 @@ def get_song_by_mid(mid):
     with urllib.request.urlopen(req, timeout=10) as response:
         data = response.read().decode('utf-8')
         
-        # 移除JSONP包装
+        # 移除JSONP包装（与C#一致）
         if data.startswith(callback + '('):
             data = data[len(callback) + 1:-2]
         
@@ -564,7 +529,7 @@ def get_lyrics_by_musicid(musicid):
     with urllib.request.urlopen(req, timeout=10) as response:
         xml_content = response.read().decode('utf-8')
         
-        # 解析XML并解密歌词
+        # 解析XML并解密歌词（与C#完全一致）
         return parse_xml_content(xml_content)
 
 # ================ Flask 路由 ================
@@ -572,15 +537,15 @@ def get_lyrics_by_musicid(musicid):
 def index():
     return json_response({
         'name': 'QQ音乐歌词解密API',
-        'version': '2.1.0',
+        'version': '2.0.0',
+        'description': '与C#代码完全一致的实现',
         'endpoints': {
             '/api/lyrics?musicid=<musicid>': '通过musicid获取歌词',
             '/api/lyrics/mid?mid=<mid>': '通过mid获取歌词',
             '/api/test': '测试接口',
             '/api/debug?hex=<hex>': '调试接口（直接解密）'
         },
-        'example': '/api/lyrics?musicid=213836590',
-        'note': '修复了逐字歌词换行符问题'
+        'example': '/api/lyrics?musicid=213836590'
     })
 
 @app.route('/api/lyrics', methods=['GET'])
@@ -606,19 +571,16 @@ def get_lyrics_by_id():
                 'musicid': musicid
             }, 404)
         
-        # 处理歌词文本，确保换行符等正确
+        # 获取歌词文本（与C#完全一致，不做任何格式化）
         lyrics = result.get('lyrics', '')
         translation = result.get('trans', '')
         
-        # 移除可能的BOM字符
-        if lyrics and lyrics.startswith('\ufeff'):
-            lyrics = lyrics[1:]
-        if translation and translation.startswith('\ufeff'):
-            translation = translation[1:]
-        
-        # 确保翻译也有正确的换行符（虽然通常已经有了）
-        if translation:
-            translation = translation.replace('\r\n', '\n').replace('\r', '\n')
+        # 注意：C#代码没有处理BOM字符，但Python需要处理
+        # 为了完全一致，我们也不处理BOM字符
+        # if lyrics and lyrics.startswith('\ufeff'):
+        #     lyrics = lyrics[1:]
+        # if translation and translation.startswith('\ufeff'):
+        #     translation = translation[1:]
         
         return json_response({
             'success': True,
@@ -627,8 +589,7 @@ def get_lyrics_by_id():
             'translation': translation,
             'has_lyrics': bool(lyrics),
             'has_translation': bool(translation),
-            'lyrics_lines': len(lyrics.split('\n')) if lyrics else 0,
-            'translation_lines': len(translation.split('\n')) if translation else 0
+            'note': '逐字歌词格式保持原样，与C#代码完全一致'
         })
         
     except Exception as e:
@@ -677,18 +638,9 @@ def get_lyrics_by_mid():
         # 3. 通过musicid获取歌词
         result = get_lyrics_by_musicid(musicid)
         
+        # 获取歌词文本（与C#完全一致，不做任何格式化）
         lyrics = result.get('lyrics', '')
         translation = result.get('trans', '')
-        
-        # 处理BOM字符和换行符
-        if lyrics and lyrics.startswith('\ufeff'):
-            lyrics = lyrics[1:]
-        if translation and translation.startswith('\ufeff'):
-            translation = translation[1:]
-        
-        # 确保翻译也有正确的换行符
-        if translation:
-            translation = translation.replace('\r\n', '\n').replace('\r', '\n')
         
         return json_response({
             'success': True,
@@ -698,15 +650,14 @@ def get_lyrics_by_mid():
             'translation': translation,
             'has_lyrics': bool(lyrics),
             'has_translation': bool(translation),
-            'lyrics_lines': len(lyrics.split('\n')) if lyrics else 0,
-            'translation_lines': len(translation.split('\n')) if translation else 0,
             'song_info': {
                 'id': musicid,
                 'mid': mid,
                 'name': song_info.get('name', ''),
                 'title': song_info.get('title', ''),
                 'singer': song_info.get('singer', [{}])[0].get('name', '') if song_info.get('singer') else ''
-            }
+            },
+            'note': '逐字歌词格式保持原样，与C#代码完全一致'
         })
         
     except Exception as e:
@@ -753,9 +704,7 @@ def debug():
             'decrypted_length': len(decrypted),
             'decrypted': decrypted[:500] + '...' if len(decrypted) > 500 else decrypted,
             'is_xml': '<?xml' in decrypted[:20],
-            'has_newlines': '\n' in decrypted,
-            'has_carriage_return': '\r' in decrypted,
-            'newline_count': decrypted.count('\n')
+            'note': '直接解密，不做任何格式化'
         })
     except Exception as e:
         import traceback
@@ -764,41 +713,6 @@ def debug():
             'error': str(e),
             'traceback': traceback.format_exc() if app.debug else None
         }, 500)
-
-@app.route('/api/format/lyrics', methods=['POST'])
-def format_lyrics():
-    """格式化歌词接口"""
-    data = request.get_json()
-    if not data or 'lyrics' not in data:
-        return json_response({
-            'success': False,
-            'error': '缺少lyrics参数'
-        }, 400)
-    
-    lyrics = data['lyrics']
-    
-    # 尝试美化逐字歌词格式
-    # 1. 在时间标签后面添加换行
-    import re
-    
-    # 匹配时间标签如 [ti:...], [ar:...], [al:...], [by:...], [offset:0], [kana:...]
-    lyrics = re.sub(r'(\[[a-z]+:[^\]]*\])', r'\1\n', lyrics)
-    
-    # 2. 匹配逐字歌词的时间标签如 [0,4690]
-    lyrics = re.sub(r'(\[\d+,\d+\])', r'\n\1', lyrics)
-    
-    # 3. 移除多余的换行
-    lyrics = re.sub(r'\n{3,}', '\n\n', lyrics)
-    
-    # 4. 修剪开头和结尾的空白
-    lyrics = lyrics.strip()
-    
-    return json_response({
-        'success': True,
-        'original_length': len(data['lyrics']),
-        'formatted_length': len(lyrics),
-        'formatted_lyrics': lyrics
-    })
 
 # 用于Vercel
 application = app
