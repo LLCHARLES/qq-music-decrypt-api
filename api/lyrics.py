@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, Response
 import urllib.request
 import urllib.parse
 import json
@@ -324,7 +324,7 @@ def triple_des_crypt(input_bytes, schedule):
     
     return output
 
-# QQ Music 密钥
+# QQ Music 密钥 (24字节)
 QQ_KEY = b'!@#)(*$%123ZXC!@!@#)(NHL'
 
 def decrypt_qq_lyric(encrypted_hex):
@@ -342,11 +342,17 @@ def decrypt_qq_lyric(encrypted_hex):
         # 4. 解密
         decrypted_data = triple_des_crypt(encrypted_bytes, schedule)
         
-        # 5. Zlib解压
+        # 5. 移除可能的填充
+        # 查找第一个0x00作为结束
+        if 0 in decrypted_data:
+            end_index = decrypted_data.index(0)
+            decrypted_data = decrypted_data[:end_index]
+        
+        # 6. Zlib解压
         decompressed = zlib.decompress(decrypted_data)
         
-        # 6. 返回UTF-8字符串
-        return decompressed.decode('utf-8')
+        # 7. 返回UTF-8字符串
+        return decompressed.decode('utf-8', errors='ignore')
         
     except Exception as e:
         raise Exception(f"解密失败: {str(e)}")
@@ -354,82 +360,138 @@ def decrypt_qq_lyric(encrypted_hex):
 def remove_illegal_xml_content(content):
     """移除XML中的非法内容 - 对应C#的XmlUtils.RemoveIllegalContent"""
     i = 0
-    while i < len(content):
-        if content[i] == '<':
+    content_list = list(content)
+    while i < len(content_list):
+        if content_list[i] == '<':
             left = i
-        if i > 0 and content[i] == '>' and content[i-1] == '/':
-            part = content[left:i+1]
+        if i > 0 and content_list[i] == '>' and content_list[i-1] == '/':
+            part = ''.join(content_list[left:i+1])
             if '=' in part and part.find('=') == part.rfind('='):
-                part1 = content[left:left + part.find('=')]
+                part1 = ''.join(content_list[left:left + part.find('=')])
                 if ' ' not in part1.strip():
-                    content = content[:left] + content[i+1:]
+                    content_list = content_list[:left] + content_list[i+1:]
                     i = 0
                     continue
         i += 1
-    return content.strip()
+    return ''.join(content_list).strip()
 
-def parse_xml_content(xml_content):
-    """解析XML内容并提取歌词"""
-    # 移除注释
-    xml_content = xml_content.replace('<!--', '').replace('-->', '')
-    
+def create_xml_document(content):
+    """创建XML文档 - 对应C#的XmlUtils.Create"""
     # 移除非法内容
-    xml_content = remove_illegal_xml_content(xml_content)
+    content = remove_illegal_xml_content(content)
+    
+    # 修复&符号
+    content = re.sub(r'&(?![a-zA-Z]{2,6};|#[0-9]{2,4};)', '&amp;', content)
+    
+    return content
+
+def parse_qq_response(response_text):
+    """解析QQ音乐的响应"""
+    # 移除注释
+    response_text = response_text.replace('<!--', '').replace('-->', '')
+    
+    # 创建XML
+    xml_content = create_xml_document(response_text)
     
     try:
-        # 修复&符号
-        xml_content = re.sub(r'&(?![a-zA-Z]{2,6};|#[0-9]{2,4};)', '&amp;', xml_content)
-        
         # 解析XML
         root = ET.fromstring(xml_content)
         
-        # 查找歌词节点
+        # 查找歌词内容
         result = {'lyrics': '', 'trans': ''}
         
-        # 递归查找节点
-        def find_nodes(node, path=''):
-            if node.tag in ['content', 'contentts', 'contentroma', 'Lyric_1']:
-                text = node.text or ''
-                if text.strip():
-                    try:
-                        decrypted = decrypt_qq_lyric(text.strip())
-                        
-                        # 检查是否是XML格式
-                        if '<?xml' in decrypted:
-                            try:
-                                sub_root = ET.fromstring(decrypted)
-                                # 查找Lyric_1节点
-                                for elem in sub_root.iter():
-                                    if elem.tag == 'Lyric_1':
-                                        lyric_content = elem.get('LyricContent')
-                                        if lyric_content:
-                                            return lyric_content
-                            except:
-                                pass
-                        return decrypted
-                    except:
-                        pass
-            
-            for child in node:
-                found = find_nodes(child, f"{path}/{node.tag}")
-                if found:
-                    return found
-            return ''
+        # 定义映射字典
+        mapping = {
+            'content': 'orig',
+            'contentts': 'ts',
+            'contentroma': 'roma',
+            'Lyric_1': 'lyric'
+        }
         
-        # 查找原文和译文
-        for elem in root.iter():
-            if elem.tag == 'content':
-                result['lyrics'] = find_nodes(elem) or ''
-            elif elem.tag == 'contentts':
-                result['trans'] = find_nodes(elem) or ''
+        # 递归查找节点
+        def find_nodes(node, found_nodes):
+            if node.tag in mapping:
+                found_nodes[mapping[node.tag]] = node
+            for child in node:
+                find_nodes(child, found_nodes)
+        
+        nodes = {}
+        find_nodes(root, nodes)
+        
+        # 处理找到的节点
+        for key, node in nodes.items():
+            text = node.text or ''
+            if text.strip():
+                try:
+                    decrypted = decrypt_qq_lyric(text.strip())
+                    
+                    if key == 'lyric' and '<?xml' in decrypted:
+                        # 如果是XML格式，进一步解析
+                        try:
+                            sub_xml = create_xml_document(decrypted)
+                            sub_root = ET.fromstring(sub_xml)
+                            
+                            # 查找Lyric_1节点
+                            for elem in sub_root.iter():
+                                if elem.tag == 'Lyric_1':
+                                    lyric_content = elem.get('LyricContent')
+                                    if lyric_content:
+                                        if 'orig' in nodes:
+                                            result['lyrics'] = lyric_content
+                                        elif 'ts' in nodes:
+                                            result['trans'] = lyric_content
+                                    break
+                        except:
+                            # 如果不是XML，直接使用
+                            if 'orig' in nodes and key == 'orig':
+                                result['lyrics'] = decrypted
+                            elif 'ts' in nodes and key == 'ts':
+                                result['trans'] = decrypted
+                    else:
+                        if key == 'orig':
+                            result['lyrics'] = decrypted
+                        elif key == 'ts':
+                            result['trans'] = decrypted
+                except Exception as e:
+                    print(f"解密{key}失败: {e}")
+                    continue
         
         return result
         
     except Exception as e:
-        raise Exception(f"XML解析失败: {str(e)}")
+        # 如果不是XML，尝试直接解析为JSON
+        try:
+            # 移除可能的回调函数包装
+            if response_text.startswith('callback('):
+                response_text = response_text[9:-2]
+            
+            data = json.loads(response_text)
+            
+            result = {'lyrics': '', 'trans': ''}
+            
+            # 尝试解密lyric字段
+            if 'lyric' in data and data['lyric']:
+                try:
+                    decrypted = decrypt_qq_lyric(data['lyric'])
+                    result['lyrics'] = decrypted
+                except:
+                    pass
+            
+            # 尝试解密trans字段
+            if 'trans' in data and data['trans']:
+                try:
+                    decrypted = decrypt_qq_lyric(data['trans'])
+                    result['trans'] = decrypted
+                except:
+                    pass
+            
+            return result
+            
+        except:
+            raise Exception(f"解析响应失败: {str(e)}")
 
 def get_song_by_mid(mid):
-    """通过mid获取歌曲信息 - 对应C#的GetSong方法"""
+    """通过mid获取歌曲信息"""
     callback = 'getOneSongInfoCallback'
     params = {
         'songmid': mid,
@@ -466,7 +528,15 @@ def get_song_by_mid(mid):
         return json.loads(data)
 
 def get_lyrics_by_musicid(musicid):
-    """通过musicid获取歌词 - 对应C#的GetLyricsAsync方法"""
+    """通过musicid获取歌词"""
+    url = 'https://c.y.qq.com/qqmusic/fcgi-bin/lyric_download.fcg'
+    
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/63.0.3239.132 Safari/537.36',
+        'Referer': 'https://c.y.qq.com/',
+        'Cookie': 'os=pc;osver=Microsoft-Windows-10-Professional-build-16299.125-64bit;appver=2.0.3.131777;channel=netease;__remember_me=true'
+    }
+    
     params = {
         'version': '15',
         'miniversion': '82',
@@ -474,28 +544,28 @@ def get_lyrics_by_musicid(musicid):
         'musicid': musicid
     }
     
-    url = 'https://c.y.qq.com/qqmusic/fcgi-bin/lyric_download.fcg'
-    
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/63.0.3239.132 Safari/537.36',
-        'Referer': 'https://c.y.qq.com/',
-        'Cookie': 'os=pc;osver=Microsoft-Windows-10-Professional-build-16299.125-64bit;appver=2.0.3.131777;channel=netease;__remember_me=true',
-        'Content-Type': 'application/x-www-form-urlencoded'
-    }
-    
-    data = urllib.parse.urlencode(params).encode('utf-8')
-    req = urllib.request.Request(url, data=data, headers=headers)
+    # 使用GET请求
+    url_with_params = url + '?' + urllib.parse.urlencode(params)
+    req = urllib.request.Request(url_with_params, headers=headers)
     
     with urllib.request.urlopen(req, timeout=10) as response:
-        xml_content = response.read().decode('utf-8')
+        response_text = response.read().decode('utf-8')
         
-        # 解析XML并解密歌词
-        return parse_xml_content(xml_content)
+        # 解析响应
+        return parse_qq_response(response_text)
 
 # ================ Flask 路由 ================
+def json_response(data, status=200):
+    """返回JSON响应，确保正确处理中文"""
+    return Response(
+        json.dumps(data, ensure_ascii=False),
+        status=status,
+        mimetype='application/json; charset=utf-8'
+    )
+
 @app.route('/')
 def index():
-    return jsonify({
+    return json_response({
         'name': 'QQ音乐歌词解密API',
         'version': '2.0.0',
         'endpoints': {
@@ -506,115 +576,178 @@ def index():
         'example': '/api/lyrics?musicid=213836590'
     })
 
-@app.route('/api/lyrics', methods=['GET'])
+@app.route('/api/lyrics', methods=['GET', 'OPTIONS'])
 def get_lyrics_by_id():
     """通过musicid获取歌词"""
+    if request.method == 'OPTIONS':
+        return '', 200
+    
     musicid = request.args.get('musicid')
     
     if not musicid:
-        return jsonify({
+        return json_response({
             'success': False,
             'error': '缺少musicid参数',
             'example': '/api/lyrics?musicid=213836590'
-        }), 400
+        }, 400)
     
     try:
+        print(f"正在获取歌词 musicid={musicid}")
         result = get_lyrics_by_musicid(musicid)
+        print(f"获取结果: lyrics长度={len(result['lyrics'])}, trans长度={len(result['trans'])}")
         
         if not result['lyrics'] and not result['trans']:
-            return jsonify({
+            return json_response({
                 'success': False,
                 'error': '未找到歌词',
                 'musicid': musicid
-            }), 404
+            }, 404)
         
-        return jsonify({
+        response_data = {
             'success': True,
             'musicid': musicid,
             'lyrics': result['lyrics'],
             'translation': result['trans'],
             'has_lyrics': bool(result['lyrics']),
             'has_translation': bool(result['trans'])
-        })
+        }
+        
+        return json_response(response_data)
         
     except Exception as e:
-        return jsonify({
+        import traceback
+        error_details = traceback.format_exc()
+        print(f"获取歌词失败: {error_details}")
+        
+        return json_response({
             'success': False,
             'error': str(e),
-            'musicid': musicid
-        }), 500
+            'musicid': musicid,
+            'details': error_details[:500] if len(error_details) > 500 else error_details
+        }, 500)
 
-@app.route('/api/lyrics/mid', methods=['GET'])
+@app.route('/api/lyrics/mid', methods=['GET', 'OPTIONS'])
 def get_lyrics_by_mid():
     """通过mid获取歌词"""
+    if request.method == 'OPTIONS':
+        return '', 200
+    
     mid = request.args.get('mid')
     
     if not mid:
-        return jsonify({
+        return json_response({
             'success': False,
             'error': '缺少mid参数',
             'example': '/api/lyrics/mid?mid=003F1P942q4lEs'
-        }), 400
+        }, 400)
     
     try:
         # 1. 通过mid获取歌曲信息
         song_data = get_song_by_mid(mid)
         
         if not song_data or 'data' not in song_data or not song_data['data']:
-            return jsonify({
+            return json_response({
                 'success': False,
                 'error': '未找到歌曲信息',
                 'mid': mid
-            }), 404
+            }, 404)
         
         # 2. 获取musicid
-        musicid = song_data['data'][0].get('id')
+        musicid = song_data['data'][0].get('id') if isinstance(song_data['data'][0], dict) else None
         if not musicid:
-            return jsonify({
+            return json_response({
                 'success': False,
                 'error': '未找到歌曲ID',
                 'mid': mid
-            }), 404
+            }, 404)
         
         # 3. 通过musicid获取歌词
         result = get_lyrics_by_musicid(musicid)
         
-        return jsonify({
+        response_data = {
             'success': True,
             'mid': mid,
             'musicid': musicid,
             'lyrics': result['lyrics'],
             'translation': result['trans'],
             'has_lyrics': bool(result['lyrics']),
-            'has_translation': bool(result['trans']),
-            'song_info': {
+            'has_translation': bool(result['trans'])
+        }
+        
+        # 添加歌曲信息
+        if isinstance(song_data['data'][0], dict):
+            song_info = song_data['data'][0]
+            response_data['song_info'] = {
                 'id': musicid,
                 'mid': mid,
-                'name': song_data['data'][0].get('name', ''),
-                'singer': song_data['data'][0].get('singer', [{}])[0].get('name', '') if song_data['data'][0].get('singer') else ''
+                'name': song_info.get('name', ''),
+                'singer': song_info.get('singer', '')
             }
-        })
+        
+        return json_response(response_data)
         
     except Exception as e:
-        return jsonify({
+        import traceback
+        error_details = traceback.format_exc()
+        print(f"通过mid获取歌词失败: {error_details}")
+        
+        return json_response({
             'success': False,
             'error': str(e),
-            'mid': mid
-        }), 500
+            'mid': mid,
+            'details': error_details[:500] if len(error_details) > 500 else error_details
+        }, 500)
 
 @app.route('/api/test', methods=['GET'])
 def test():
     """测试接口"""
-    return jsonify({
+    return json_response({
         'success': True,
         'message': 'API运行正常',
         'timestamp': '2023-01-01T00:00:00Z',
-        'endpoints': [
-            {'path': '/api/lyrics?musicid=<id>', 'method': 'GET', 'description': '通过musicid获取歌词'},
-            {'path': '/api/lyrics/mid?mid=<mid>', 'method': 'GET', 'description': '通过mid获取歌词'},
-            {'path': '/api/test', 'method': 'GET', 'description': '测试接口'}
-        ]
+        '中文测试': '这是一条中文测试消息'
     })
+
+@app.route('/api/debug', methods=['GET'])
+def debug():
+    """调试接口"""
+    musicid = request.args.get('musicid', '213836590')
+    
+    try:
+        url = 'https://c.y.qq.com/qqmusic/fcgi-bin/lyric_download.fcg'
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/63.0.3239.132 Safari/537.36',
+            'Referer': 'https://c.y.qq.com/',
+            'Cookie': 'os=pc;osver=Microsoft-Windows-10-Professional-build-16299.125-64bit;appver=2.0.3.131777;channel=netease;__remember_me=true'
+        }
+        
+        params = {
+            'version': '15',
+            'miniversion': '82',
+            'lrctype': '4',
+            'musicid': musicid
+        }
+        
+        url_with_params = url + '?' + urllib.parse.urlencode(params)
+        req = urllib.request.Request(url_with_params, headers=headers)
+        
+        with urllib.request.urlopen(req, timeout=10) as response:
+            raw_response = response.read().decode('utf-8')
+            
+            # 返回原始响应
+            return json_response({
+                'success': True,
+                'musicid': musicid,
+                'raw_response': raw_response[:1000] + '...' if len(raw_response) > 1000 else raw_response,
+                'response_length': len(raw_response)
+            })
+            
+    except Exception as e:
+        return json_response({
+            'success': False,
+            'error': str(e),
+            'musicid': musicid
+        }, 500)
 
 # 用于Vercel
 application = app
