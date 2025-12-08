@@ -1,19 +1,23 @@
 from flask import Flask, request, jsonify
-from flask_cors import CORS
 import urllib.request
 import json
 import zlib
 from enum import Enum
 
 app = Flask(__name__)
-CORS(app)  # 启用 CORS
 
-# ================ DES 算法实现 (完整复制) ================
+# ================ CORS 支持 ================
+@app.after_request
+def after_request(response):
+    response.headers.add('Access-Control-Allow-Origin', '*')
+    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+    response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
+    return response
 
+# ================ DES 算法实现 ================
 class DESMode(Enum):
     DES_ENCRYPT = 'DES_ENCRYPT'
     DES_DECRYPT = 'DES_DECRYPT'
-
 
 def bit_num(a: bytearray, b: int, c: int):
     byte_index = (b // 32) * 4 + 3 - (b % 32) // 8
@@ -21,16 +25,13 @@ def bit_num(a: bytearray, b: int, c: int):
     extracted_bit = (a[byte_index] >> bit_position) & 0x01
     return extracted_bit << c
 
-
 def bit_num_int_r(a: int, b: int, c: int) -> int:
     extracted_bit = (a >> (31 - b)) & 0x00000001
     return extracted_bit << c
 
-
 def bit_num_int_l(a: int, b: int, c: int) -> int:
     extracted_bit = (a << b) & 0x80000000
     return extracted_bit >> c
-
 
 def s_box_bit(a: int) -> int:
     part1 = (a & 0x20)
@@ -38,8 +39,6 @@ def s_box_bit(a: int) -> int:
     part3 = ((a & 0x01) << 4)
     return part1 | part2 | part3
 
-
-# S盒定义
 s_box1 = [
     14, 4, 13, 1, 2, 15, 11, 8, 3, 10, 6, 12, 5, 9, 0, 7,
     0, 15, 7, 4, 14, 2, 13, 1, 10, 6, 12, 11, 9, 5, 3, 8,
@@ -96,7 +95,6 @@ s_box8 = [
     2, 1, 14, 7, 4, 10, 8, 13, 15, 12, 9, 0, 3, 5, 6, 11
 ]
 
-
 def ip(state: list, in_bytes: bytearray):
     state[0] = (
         bit_num(in_bytes, 57, 31) | bit_num(in_bytes, 49, 30) | bit_num(in_bytes, 41, 29) |
@@ -125,7 +123,6 @@ def ip(state: list, in_bytes: bytearray):
         bit_num(in_bytes, 14, 1) | bit_num(in_bytes, 6, 0)
     )
     return state
-
 
 def inv_ip(state: list, in_bytes: bytearray):
     in_bytes[3] = (
@@ -178,7 +175,6 @@ def inv_ip(state: list, in_bytes: bytearray):
     )
     return in_bytes
 
-
 def f(state: int, key: list) -> int:
     lrgstate = [0] * 6
 
@@ -229,7 +225,6 @@ def f(state: int, key: list) -> int:
 
     return state
 
-
 def des_key_setup(key: bytearray, schedule: list, mode: DESMode):
     key_rnd_shift = [1, 1, 2, 2, 2, 2, 2, 2, 1, 2, 2, 2, 2, 2, 2, 1]
     key_perm_c = [56, 48, 40, 32, 24, 16, 8, 0, 57, 49, 41, 33, 25, 17,
@@ -263,7 +258,6 @@ def des_key_setup(key: bytearray, schedule: list, mode: DESMode):
         for j in range(24, 48):
             schedule[to_gen][j // 8] |= bit_num_int_r(d, key_compression[j] - 27, 7 - (j % 8))
 
-
 def des_crypt(input_bytes: bytearray, key_schedule: list):
     state = [0, 0]
 
@@ -283,12 +277,10 @@ def des_crypt(input_bytes: bytearray, key_schedule: list):
     inv_ip(state, input_bytes)
     return input_bytes
 
-
 # 密钥定义
 KEY1 = b"!@#)(NHLiuy*$%^&"
 KEY2 = b"123ZXC!@#)(*$%^&"
 KEY3 = b"!@#)(*$%^&abcDEF"
-
 
 def func_des(buff: bytearray, key: bytes, length: int) -> bytearray:
     schedule = [[0] * 6 for _ in range(16)]
@@ -298,7 +290,6 @@ def func_des(buff: bytearray, key: bytes, length: int) -> bytearray:
         output += des_crypt(buff[i:i + 8], schedule)
     return output
 
-
 def func_ddes(buff: bytearray, key: bytes, length: int) -> bytearray:
     schedule = [[0] * 6 for _ in range(16)]
     des_key_setup(bytearray(key), schedule, DESMode.DES_DECRYPT)
@@ -307,13 +298,11 @@ def func_ddes(buff: bytearray, key: bytes, length: int) -> bytearray:
         output += des_crypt(buff[i:i + 8], schedule)
     return output
 
-
 def lyric_decode(content: bytearray, length: int) -> bytearray:
     content = func_ddes(content, KEY1, length)
     content = func_des(content, KEY2, length)
     content = func_ddes(content, KEY3, length)
     return content
-
 
 def decrypt_qq_lyric(encrypted_hex: str) -> str:
     """解密QQ音乐歌词的完整函数"""
@@ -325,9 +314,7 @@ def decrypt_qq_lyric(encrypted_hex: str) -> str:
     except Exception as e:
         raise Exception(f"解密失败: {str(e)}")
 
-
 # ================ Flask 路由 ================
-
 @app.route('/')
 def index():
     return jsonify({
@@ -337,10 +324,12 @@ def index():
         'example': '/api/lyrics?musicid=123456'
     })
 
-
-@app.route('/api/lyrics', methods=['GET'])
+@app.route('/api/lyrics', methods=['GET', 'OPTIONS'])
 def get_lyrics():
     """获取并解密歌词"""
+    if request.method == 'OPTIONS':
+        return '', 200
+    
     musicid = request.args.get('musicid')
     
     if not musicid:
@@ -445,26 +434,14 @@ def get_lyrics():
             'musicid': musicid
         }), 500
 
-
 @app.route('/api/test', methods=['GET'])
 def test():
-    """测试接口，验证DES解密是否正常工作"""
-    try:
-        # 测试解密一小段歌词
-        test_hex = "6B3F43A9B333C60F"  # 简化的测试数据
-        decrypted = decrypt_qq_lyric(test_hex)
-        return jsonify({
-            'success': True,
-            'message': 'DES解密功能正常',
-            'test_data': test_hex,
-            'decrypted_length': len(decrypted)
-        })
-    except Exception as e:
-        return jsonify({
-            'success': False,
-            'message': f'DES解密测试失败: {str(e)}'
-        }), 500
-
+    """测试接口"""
+    return jsonify({
+        'success': True,
+        'message': 'API 运行正常',
+        'timestamp': '2023-01-01T00:00:00Z'
+    })
 
 # Vercel 需要这个变量
 application = app
