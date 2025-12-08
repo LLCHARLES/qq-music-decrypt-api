@@ -1,4 +1,4 @@
-# api/des_decrypt.py
+# des_decrypt.py
 import zlib
 from enum import Enum
 import array
