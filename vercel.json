@@ -1,17 +1,20 @@
 {
-  "functions": {
-    "api/lyrics.py": {
-      "maxDuration": 10
-    }
-  },
-  "rewrites": [
+  "builds": [
     {
-      "source": "/api/lyrics",
-      "destination": "/api/lyrics.py"
+      "src": "api/lyrics.py",
+      "use": "@vercel/python"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/api/lyrics",
+      "dest": "/api/lyrics.py",
+      "methods": ["GET", "OPTIONS"]
     },
     {
-      "source": "/lyrics",
-      "destination": "/api/lyrics.py"
+      "src": "/lyrics",
+      "dest": "/api/lyrics.py",
+      "methods": ["GET", "OPTIONS"]
     }
   ],
   "headers": [
@@ -31,12 +34,6 @@
           "value": "Content-Type"
         }
       ]
-    }
-  ],
-  "builds": [
-    {
-      "src": "api/lyrics.py",
-      "use": "@vercel/python"
     }
   ]
 }
