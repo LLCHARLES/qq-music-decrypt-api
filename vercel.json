@@ -1,16 +1,10 @@
 {
   "functions": {
     "api/lyrics.py": {
-      "runtime": "python3.9",
-      "maxDuration": 30,
-      "memory": 1024
+      "maxDuration": 30
     }
   },
   "rewrites": [
-    {
-      "source": "/api/(.*)",
-      "destination": "/api/lyrics.py"
-    },
     {
       "source": "/(.*)",
       "destination": "/api/lyrics.py"
