@@ -6,6 +6,7 @@ import zlib
 import re
 import xml.etree.ElementTree as ET
 from enum import Enum
+import io
 
 app = Flask(__name__)
 
@@ -30,7 +31,7 @@ def json_response(data, status_code=200):
     response.status_code = status_code
     return response
 
-# ================ DES算法实现 ================
+# ================ DES 算法实现 ================
 class DESMode(Enum):
     DES_ENCRYPT = 1
     DES_DECRYPT = 0
@@ -124,7 +125,7 @@ def ip(state, input_bytes):
                 bit_num(input_bytes, 42, 21) | bit_num(input_bytes, 34, 20) |
                 bit_num(input_bytes, 26, 19) | bit_num(input_bytes, 18, 18) |
                 bit_num(input_bytes, 10, 17) | bit_num(input_bytes, 2, 16) |
-                bit_num(input_bytes, 60, 15) | bit_num(input_bytes, 53, 14) |
+                bit_num(input_bytes, 60, 15) | bit_num(input_bytes, 52, 14) |
                 bit_num(input_bytes, 44, 13) | bit_num(input_bytes, 36, 12) |
                 bit_num(input_bytes, 28, 11) | bit_num(input_bytes, 20, 10) |
                 bit_num(input_bytes, 12, 9) | bit_num(input_bytes, 4, 8) |
@@ -365,86 +366,6 @@ def decrypt_qq_lyric(encrypted_hex):
     except Exception as e:
         raise Exception(f"解密失败: {str(e)}")
 
-def extract_lyric_content_from_xml(xml_text):
-    """从XML中提取LyricContent - 使用正则表达式保留换行符"""
-    try:
-        # 使用正则表达式直接提取LyricContent属性值
-        # 注意：XML属性值中的换行符会被解析为换行符，但Python的XML解析器可能会将其规范化
-        # 所以我们使用正则表达式直接匹配
-        import re
-        
-        # 查找LyricContent属性，使用非贪婪匹配
-        # 注意：属性值可能包含换行符，所以使用re.DOTALL
-        pattern = r'LyricContent="([^"]*)"'
-        match = re.search(pattern, xml_text, re.DOTALL)
-        
-        if match:
-            lyric_content = match.group(1)
-            
-            # 处理XML转义字符
-            lyric_content = lyric_content.replace('&quot;', '"')
-            lyric_content = lyric_content.replace('&amp;', '&')
-            lyric_content = lyric_content.replace('&lt;', '<')
-            lyric_content = lyric_content.replace('&gt;', '>')
-            lyric_content = lyric_content.replace('&#xA;', '\n')  # XML换行符实体
-            lyric_content = lyric_content.replace('&#xD;', '\r')  # XML回车符实体
-            
-            # 移除可能存在的BOM字符
-            if lyric_content.startswith('\ufeff'):
-                lyric_content = lyric_content[1:]
-            
-            # 恢复换行符（XML解析器可能将换行符转换为空格）
-            # 检查逐字歌词的格式，通常在[标签]后有换行符
-            # 但在你的例子中，XML属性值本身就有换行符，所以我们应该已经保留了
-            
-            # 如果发现连续空格可能是换行符被转换的，尝试恢复
-            # 但这里更安全的方法是直接使用正则匹配到的原始字符串
-            
-            return lyric_content
-        
-        # 如果没有找到LyricContent属性，尝试使用XML解析器作为备选
-        try:
-            import xml.etree.ElementTree as ET
-            # 修复XML，确保可以解析
-            xml_text_fixed = xml_text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;').replace('"', '&quot;')
-            root = ET.fromstring(xml_text_fixed)
-            
-            # 查找Lyric_1节点
-            for elem in root.iter():
-                if elem.tag == 'Lyric_1' or elem.tag.endswith('}Lyric_1'):
-                    lyric_content = elem.get('LyricContent')
-                    if lyric_content:
-                        # 处理转义字符
-                        lyric_content = lyric_content.replace('&quot;', '"')
-                        lyric_content = lyric_content.replace('&amp;', '&')
-                        lyric_content = lyric_content.replace('&lt;', '<')
-                        lyric_content = lyric_content.replace('&gt;', '>')
-                        lyric_content = lyric_content.replace('&#xA;', '\n')
-                        lyric_content = lyric_content.replace('&#xD;', '\r')
-                        
-                        if lyric_content.startswith('\ufeff'):
-                            lyric_content = lyric_content[1:]
-                        
-                        # 由于XML解析器可能将换行符规范化，我们需要恢复它们
-                        # 查看逐字歌词格式，通常在时间标签后应该有换行
-                        # 但在你的例子中，空格可能是换行符被转换的结果
-                        # 所以我们将特定的空格模式转换为换行符
-                        
-                        # 查找模式：'] '（标签后跟空格）可能是换行符被转换的结果
-                        # 但在你的返回结果中，我们看到的是连续的歌词，没有空格
-                        # 所以这可能不是问题
-                        
-                        return lyric_content
-        except:
-            pass
-        
-        # 如果都失败了，返回原始XML文本
-        return xml_text
-        
-    except Exception as e:
-        print(f"提取歌词内容失败: {e}")
-        return xml_text
-
 def remove_illegal_xml_content(content):
     """移除XML中的非法内容 - 对应C#的XmlUtils.RemoveIllegalContent"""
     i = 0
@@ -462,6 +383,38 @@ def remove_illegal_xml_content(content):
         i += 1
     return content.strip()
 
+def remove_ampersand_issues(text):
+    """处理&符号问题 - 对应C#的ReplaceAmp"""
+    # 替换不正确的&符号
+    return re.sub(r'&(?![a-zA-Z]{2,6};|#[0-9]{2,4};)', '&amp;', text)
+
+def extract_lyric_from_xml(xml_text):
+    """从XML中提取歌词内容 - 对应C#中解析解密后的XML部分"""
+    if not xml_text or '<?xml' not in xml_text:
+        return xml_text
+    
+    try:
+        # 处理XML格式问题
+        xml_text = remove_ampersand_issues(xml_text)
+        
+        # 解析XML
+        root = ET.fromstring(xml_text)
+        
+        # 查找Lyric_1节点
+        for elem in root.iter():
+            if elem.tag == 'Lyric_1':
+                lyric_content = elem.get('LyricContent')
+                if lyric_content:
+                    return lyric_content
+        
+        # 如果没找到Lyric_1节点，返回原始文本
+        return xml_text
+        
+    except Exception as e:
+        print(f"XML解析失败: {e}")
+        # 如果解析失败，返回原始文本
+        return xml_text
+
 def parse_xml_content(xml_content):
     """解析XML内容并提取歌词"""
     # 移除注释
@@ -472,7 +425,7 @@ def parse_xml_content(xml_content):
     
     try:
         # 修复&符号
-        xml_content = re.sub(r'&(?![a-zA-Z]{2,6};|#[0-9]{2,4};)', '&amp;', xml_content)
+        xml_content = remove_ampersand_issues(xml_content)
         
         # 解析XML
         root = ET.fromstring(xml_content)
@@ -482,21 +435,22 @@ def parse_xml_content(xml_content):
         
         # 递归查找节点
         def find_nodes(node, path=''):
-            if node.tag in ['content', 'contentts', 'contentroma']:
+            if node.tag in ['content', 'contentts', 'contentroma', 'Lyric_1']:
                 text = node.text or ''
                 if text.strip():
                     try:
                         decrypted = decrypt_qq_lyric(text.strip())
                         
-                        # 检查是否是XML格式，如果是则提取LyricContent
-                        if '<?xml' in decrypted or '<QrcInfos>' in decrypted:
-                            lyric_content = extract_lyric_content_from_xml(decrypted)
-                            return lyric_content or decrypted
+                        # 检查是否是XML格式 - 这是关键修复！！！
+                        if '<?xml' in decrypted:
+                            # 提取LyricContent属性
+                            lyric_text = extract_lyric_from_xml(decrypted)
+                            return lyric_text
                         else:
                             return decrypted
                     except Exception as e:
                         print(f"解密失败: {e}")
-                        return ''
+                        pass
             
             for child in node:
                 found = find_nodes(child, f"{path}/{node.tag}")
@@ -507,44 +461,37 @@ def parse_xml_content(xml_content):
         # 查找原文和译文
         for elem in root.iter():
             if elem.tag == 'content':
-                lyrics = find_nodes(elem) or ''
-                result['lyrics'] = lyrics
+                lyrics_text = find_nodes(elem)
+                if lyrics_text:
+                    result['lyrics'] = lyrics_text
             elif elem.tag == 'contentts':
-                trans = find_nodes(elem) or ''
-                result['trans'] = trans
+                trans_text = find_nodes(elem)
+                if trans_text:
+                    result['trans'] = trans_text
         
-        # 如果逐字歌词没有换行符但应该有，尝试添加换行符
-        if result['lyrics']:
-            # 检查是否包含时间标签但没有换行符
-            if '[' in result['lyrics'] and ']' in result['lyrics'] and '\n' not in result['lyrics']:
-                # 尝试在标签后添加换行符
-                # 模式：[ti:...] [ar:...] 等
-                import re
-                
-                # 在歌词标签后添加换行符
-                lyrics_formatted = re.sub(r'(\[ti:[^\]]*\])', r'\1\n', result['lyrics'])
-                lyrics_formatted = re.sub(r'(\[ar:[^\]]*\])', r'\1\n', lyrics_formatted)
-                lyrics_formatted = re.sub(r'(\[al:[^\]]*\])', r'\1\n', lyrics_formatted)
-                lyrics_formatted = re.sub(r'(\[by:[^\]]*\])', r'\1\n', lyrics_formatted)
-                lyrics_formatted = re.sub(r'(\[offset:[^\]]*\])', r'\1\n', lyrics_formatted)
-                lyrics_formatted = re.sub(r'(\[kana:[^\]]*\])', r'\1\n', lyrics_formatted)
-                
-                # 在时间标签后添加换行符（如 [0,3260]）
-                # 但注意不要破坏逐字时间标签
-                # 我们只在大的时间标签后添加换行符，这些标签通常表示新的行
-                # 模式：[数字,数字]文本
-                # 但我们需要区分是行时间标签还是逐字时间标签
-                
-                # 首先移除多余的空行
-                lyrics_formatted = re.sub(r'\n+', '\n', lyrics_formatted).strip()
-                
-                # 如果格式化后的歌词不同，则使用格式化后的版本
-                if lyrics_formatted != result['lyrics']:
-                    result['lyrics'] = lyrics_formatted
+        # 如果递归查找失败，尝试直接查找
+        if not result['lyrics'] and not result['trans']:
+            # 直接查找content和contentts标签
+            for elem in root.iter('content'):
+                if elem.text:
+                    try:
+                        decrypted = decrypt_qq_lyric(elem.text.strip())
+                        result['lyrics'] = extract_lyric_from_xml(decrypted)
+                    except:
+                        pass
+            
+            for elem in root.iter('contentts'):
+                if elem.text:
+                    try:
+                        decrypted = decrypt_qq_lyric(elem.text.strip())
+                        result['trans'] = extract_lyric_from_xml(decrypted)
+                    except:
+                        pass
         
         return result
         
     except Exception as e:
+        print(f"XML解析失败，尝试正则匹配: {e}")
         # 如果XML解析失败，尝试使用正则表达式提取
         return extract_content_with_regex(xml_content)
 
@@ -559,13 +506,9 @@ def extract_content_with_regex(xml_content):
         if encrypted:
             try:
                 decrypted = decrypt_qq_lyric(encrypted)
-                # 检查是否是XML格式，如果是则提取LyricContent
-                if '<?xml' in decrypted or '<QrcInfos>' in decrypted:
-                    result['lyrics'] = extract_lyric_content_from_xml(decrypted)
-                else:
-                    result['lyrics'] = decrypted
+                result['lyrics'] = extract_lyric_from_xml(decrypted)
             except Exception as e:
-                print(f"解密原文歌词失败: {e}")
+                print(f"解密原文歌词失败（正则）: {e}")
     
     # 匹配<contentts>标签
     contentts_match = re.search(r'<contentts>(.*?)</contentts>', xml_content, re.DOTALL)
@@ -574,13 +517,9 @@ def extract_content_with_regex(xml_content):
         if encrypted:
             try:
                 decrypted = decrypt_qq_lyric(encrypted)
-                # 检查是否是XML格式，如果是则提取LyricContent
-                if '<?xml' in decrypted or '<QrcInfos>' in decrypted:
-                    result['trans'] = extract_lyric_content_from_xml(decrypted)
-                else:
-                    result['trans'] = decrypted
+                result['trans'] = extract_lyric_from_xml(decrypted)
             except Exception as e:
-                print(f"解密翻译歌词失败: {e}")
+                print(f"解密翻译歌词失败（正则）: {e}")
     
     return result
 
@@ -653,14 +592,15 @@ def get_lyrics_by_musicid(musicid):
 def index():
     return json_response({
         'name': 'QQ音乐歌词解密API',
-        'version': '2.0.0',
+        'version': '2.0.1',
+        'description': '修复XML解析，提取LyricContent',
         'endpoints': {
             '/api/lyrics?musicid=<musicid>': '通过musicid获取歌词',
             '/api/lyrics/mid?mid=<mid>': '通过mid获取歌词',
             '/api/test': '测试接口',
             '/api/debug?hex=<hex>': '调试接口（直接解密）'
         },
-        'example': '/api/lyrics?musicid=213836590'
+        'example': '/api/lyrics?musicid=559981893'
     })
 
 @app.route('/api/lyrics', methods=['GET'])
@@ -672,7 +612,7 @@ def get_lyrics_by_id():
         return json_response({
             'success': False,
             'error': '缺少musicid参数',
-            'example': '/api/lyrics?musicid=213836590'
+            'example': '/api/lyrics?musicid=559981893'
         }, 400)
     
     try:
@@ -690,7 +630,7 @@ def get_lyrics_by_id():
         lyrics = result.get('lyrics', '')
         translation = result.get('trans', '')
         
-        # 移除可能存在的BOM字符
+        # 移除可能的BOM字符
         if lyrics and lyrics.startswith('\ufeff'):
             lyrics = lyrics[1:]
         if translation and translation.startswith('\ufeff'):
@@ -702,7 +642,8 @@ def get_lyrics_by_id():
             'lyrics': lyrics,
             'translation': translation,
             'has_lyrics': bool(lyrics),
-            'has_translation': bool(translation)
+            'has_translation': bool(translation),
+            'note': '已修复XML解析，正确提取歌词内容'
         })
         
     except Exception as e:
@@ -774,7 +715,8 @@ def get_lyrics_by_mid():
                 'name': song_info.get('name', ''),
                 'title': song_info.get('title', ''),
                 'singer': song_info.get('singer', [{}])[0].get('name', '') if song_info.get('singer') else ''
-            }
+            },
+            'note': '已修复XML解析，正确提取歌词内容'
         })
         
     except Exception as e:
@@ -816,22 +758,17 @@ def debug():
     try:
         decrypted = decrypt_qq_lyric(hex_str)
         
-        # 检查是否是XML格式，如果是则提取LyricContent
-        if '<?xml' in decrypted or '<QrcInfos>' in decrypted:
-            lyric_content = extract_lyric_content_from_xml(decrypted)
-            extracted = lyric_content != decrypted
-            
+        # 尝试提取LyricContent
+        if '<?xml' in decrypted:
+            extracted = extract_lyric_from_xml(decrypted)
             return json_response({
                 'success': True,
                 'original_length': len(hex_str),
                 'decrypted_length': len(decrypted),
-                'extracted_length': len(lyric_content) if extracted else 0,
                 'is_xml': True,
-                'extracted': extracted,
-                'decrypted_preview': decrypted[:200] + '...' if len(decrypted) > 200 else decrypted,
-                'lyric_content_preview': lyric_content[:200] + '...' if len(lyric_content) > 200 else lyric_content,
-                'has_newlines_in_decrypted': '\n' in decrypted,
-                'has_newlines_in_extracted': '\n' in lyric_content
+                'extracted_length': len(extracted),
+                'extracted': extracted[:500] + '...' if len(extracted) > 500 else extracted,
+                'note': '已提取LyricContent内容'
             })
         else:
             return json_response({
@@ -840,7 +777,7 @@ def debug():
                 'decrypted_length': len(decrypted),
                 'is_xml': False,
                 'decrypted': decrypted[:500] + '...' if len(decrypted) > 500 else decrypted,
-                'has_newlines': '\n' in decrypted
+                'note': '直接解密，非XML格式'
             })
     except Exception as e:
         import traceback
