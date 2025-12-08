@@ -1,4 +1,4 @@
-# api/lyrics.py - 修改后的版本，提取LyricContent内容
+# api/lyrics.py - 修改后的版本，使用正则表达式提取LyricContent，保留换行符
 
 from flask import Flask, request, jsonify, make_response
 import urllib.request
@@ -130,8 +130,8 @@ def ip(state, input_bytes):
                 bit_num(input_bytes, 44, 13) | bit_num(input_bytes, 36, 12) |
                 bit_num(input_bytes, 28, 11) | bit_num(input_bytes, 20, 10) |
                 bit_num(input_bytes, 12, 9) | bit_num(input_bytes, 4, 8) |
-                bit_num(input_bytes, 62, 7) | bit_num(input_bytes, 54, 6) |
-                bit_num(input_bytes, 46, 5) | bit_num(input_bytes, 38, 4) |
+                bit_num(input_bytes, 62, 7) | bit_num(input_bytes, 55, 6) |
+                bit_num(input_bytes, 47, 5) | bit_num(input_bytes, 39, 4) |
                 bit_num(input_bytes, 30, 3) | bit_num(input_bytes, 22, 2) |
                 bit_num(input_bytes, 14, 1) | bit_num(input_bytes, 6, 0))
     return state
@@ -367,25 +367,33 @@ def decrypt_qq_lyric(encrypted_hex):
     except Exception as e:
         raise Exception(f"解密失败: {str(e)}")
 
-def extract_lyric_content(xml_string):
-    """从XML字符串中提取LyricContent内容"""
+def extract_lyric_content_from_xml(xml_string):
+    """从XML字符串中提取LyricContent内容，使用正则表达式保留换行符"""
+    # 方法1：使用正则表达式提取LyricContent属性值
+    # 匹配 LyricContent="..." 或 LyricContent='...'
+    pattern1 = r'LyricContent=(["\'])(.*?)\1'
+    match = re.search(pattern1, xml_string, re.DOTALL)
+    
+    if match:
+        # 找到匹配，返回属性值
+        lyric_content = match.group(2)
+        # 替换可能存在的XML实体
+        lyric_content = lyric_content.replace('&quot;', '"').replace('&apos;', "'").replace('&lt;', '<').replace('&gt;', '>').replace('&amp;', '&')
+        return lyric_content
+    
+    # 方法2：如果正则表达式失败，尝试使用XML解析
     try:
-        # 解析XML
         root = ET.fromstring(xml_string)
-        
-        # 查找Lyric_1节点
         lyric_node = root.find('.//Lyric_1')
         if lyric_node is not None:
             lyric_content = lyric_node.get('LyricContent')
             if lyric_content is not None:
                 return lyric_content
-        
-        # 如果没有找到Lyric_1节点，尝试直接返回整个内容
-        return xml_string
     except Exception as e:
-        # 如果解析失败，返回原始字符串
         print(f"XML解析失败: {e}")
-        return xml_string
+    
+    # 方法3：如果都没找到，返回原始字符串
+    return xml_string
 
 def remove_illegal_xml_content(content):
     """移除XML中的非法内容 - 对应C#的XmlUtils.RemoveIllegalContent"""
@@ -438,9 +446,9 @@ def parse_xml_content(xml_content):
         if content_node is not None and content_node.text:
             try:
                 decrypted_text = decrypt_qq_lyric(content_node.text.strip())
-                # 如果是XML格式，提取LyricContent内容
+                # 使用正则表达式提取LyricContent，保留换行符
                 if decrypted_text and decrypted_text.strip().startswith('<?xml'):
-                    result['lyrics'] = extract_lyric_content(decrypted_text)
+                    result['lyrics'] = extract_lyric_content_from_xml(decrypted_text)
                 else:
                     result['lyrics'] = decrypted_text
             except Exception as e:
@@ -476,9 +484,9 @@ def extract_content_with_regex(xml_content):
         if encrypted:
             try:
                 decrypted_text = decrypt_qq_lyric(encrypted)
-                # 如果是XML格式，提取LyricContent内容
+                # 使用正则表达式提取LyricContent，保留换行符
                 if decrypted_text and decrypted_text.strip().startswith('<?xml'):
-                    result['lyrics'] = extract_lyric_content(decrypted_text)
+                    result['lyrics'] = extract_lyric_content_from_xml(decrypted_text)
                 else:
                     result['lyrics'] = decrypted_text
             except Exception as e:
@@ -565,8 +573,8 @@ def get_lyrics_by_musicid(musicid):
 def index():
     return json_response({
         'name': 'QQ音乐歌词解密API',
-        'version': '2.0.1',
-        'description': '提取LyricContent内容的实现',
+        'version': '2.0.2',
+        'description': '使用正则表达式提取LyricContent，保留换行符',
         'endpoints': {
             '/api/lyrics?musicid=<musicid>': '通过musicid获取歌词',
             '/api/lyrics/mid?mid=<mid>': '通过mid获取歌词',
@@ -610,7 +618,7 @@ def get_lyrics_by_id():
             'translation': translation,
             'has_lyrics': bool(lyrics),
             'has_translation': bool(translation),
-            'note': '已提取逐字歌词内容'
+            'note': '使用正则表达式提取，保留换行符'
         })
         
     except Exception as e:
@@ -678,7 +686,7 @@ def get_lyrics_by_mid():
                 'title': song_info.get('title', ''),
                 'singer': song_info.get('singer', [{}])[0].get('name', '') if song_info.get('singer') else ''
             },
-            'note': '已提取逐字歌词内容'
+            'note': '使用正则表达式提取，保留换行符'
         })
         
     except Exception as e:
