@@ -1,16 +1,17 @@
-# api/lyrics.py
 import json
 import urllib.parse
 import urllib.request
 import urllib.error
 import zlib
 from enum import Enum
+from typing import List
 
-# === DES 解密部分开始 ===
+# ================ DES 算法实现 (完整复制) ================
 
 class DESMode(Enum):
     DES_ENCRYPT = 'DES_ENCRYPT'
     DES_DECRYPT = 'DES_DECRYPT'
+
 
 def bit_num(a: bytearray, b: int, c: int):
     byte_index = (b // 32) * 4 + 3 - (b % 32) // 8
@@ -18,13 +19,16 @@ def bit_num(a: bytearray, b: int, c: int):
     extracted_bit = (a[byte_index] >> bit_position) & 0x01
     return extracted_bit << c
 
+
 def bit_num_int_r(a: int, b: int, c: int) -> int:
     extracted_bit = (a >> (31 - b)) & 0x00000001
     return extracted_bit << c
 
+
 def bit_num_int_l(a: int, b: int, c: int) -> int:
     extracted_bit = (a << b) & 0x80000000
     return extracted_bit >> c
+
 
 def s_box_bit(a: int) -> int:
     part1 = (a & 0x20)
@@ -32,6 +36,8 @@ def s_box_bit(a: int) -> int:
     part3 = ((a & 0x01) << 4)
     return part1 | part2 | part3
 
+
+# S盒定义
 s_box1 = [
     14, 4, 13, 1, 2, 15, 11, 8, 3, 10, 6, 12, 5, 9, 0, 7,
     0, 15, 7, 4, 14, 2, 13, 1, 10, 6, 12, 11, 9, 5, 3, 8,
@@ -88,87 +94,90 @@ s_box8 = [
     2, 1, 14, 7, 4, 10, 8, 13, 15, 12, 9, 0, 3, 5, 6, 11
 ]
 
-def ip(state: list, in_bytes: bytearray):
+
+def ip(state: List[int], in_bytes: bytearray):
     state[0] = (
-            bit_num(in_bytes, 57, 31) | bit_num(in_bytes, 49, 30) | bit_num(in_bytes, 41, 29) |
-            bit_num(in_bytes, 33, 28) | bit_num(in_bytes, 25, 27) | bit_num(in_bytes, 17, 26) |
-            bit_num(in_bytes, 9, 25) | bit_num(in_bytes, 1, 24) | bit_num(in_bytes, 59, 23) |
-            bit_num(in_bytes, 51, 22) | bit_num(in_bytes, 43, 21) | bit_num(in_bytes, 35, 20) |
-            bit_num(in_bytes, 27, 19) | bit_num(in_bytes, 19, 18) | bit_num(in_bytes, 11, 17) |
-            bit_num(in_bytes, 3, 16) | bit_num(in_bytes, 61, 15) | bit_num(in_bytes, 53, 14) |
-            bit_num(in_bytes, 45, 13) | bit_num(in_bytes, 37, 12) | bit_num(in_bytes, 29, 11) |
-            bit_num(in_bytes, 21, 10) | bit_num(in_bytes, 13, 9) | bit_num(in_bytes, 5, 8) |
-            bit_num(in_bytes, 63, 7) | bit_num(in_bytes, 55, 6) | bit_num(in_bytes, 47, 5) |
-            bit_num(in_bytes, 39, 4) | bit_num(in_bytes, 31, 3) | bit_num(in_bytes, 23, 2) |
-            bit_num(in_bytes, 15, 1) | bit_num(in_bytes, 7, 0)
+        bit_num(in_bytes, 57, 31) | bit_num(in_bytes, 49, 30) | bit_num(in_bytes, 41, 29) |
+        bit_num(in_bytes, 33, 28) | bit_num(in_bytes, 25, 27) | bit_num(in_bytes, 17, 26) |
+        bit_num(in_bytes, 9, 25) | bit_num(in_bytes, 1, 24) | bit_num(in_bytes, 59, 23) |
+        bit_num(in_bytes, 51, 22) | bit_num(in_bytes, 43, 21) | bit_num(in_bytes, 35, 20) |
+        bit_num(in_bytes, 27, 19) | bit_num(in_bytes, 19, 18) | bit_num(in_bytes, 11, 17) |
+        bit_num(in_bytes, 3, 16) | bit_num(in_bytes, 61, 15) | bit_num(in_bytes, 53, 14) |
+        bit_num(in_bytes, 45, 13) | bit_num(in_bytes, 37, 12) | bit_num(in_bytes, 29, 11) |
+        bit_num(in_bytes, 21, 10) | bit_num(in_bytes, 13, 9) | bit_num(in_bytes, 5, 8) |
+        bit_num(in_bytes, 63, 7) | bit_num(in_bytes, 55, 6) | bit_num(in_bytes, 47, 5) |
+        bit_num(in_bytes, 39, 4) | bit_num(in_bytes, 31, 3) | bit_num(in_bytes, 23, 2) |
+        bit_num(in_bytes, 15, 1) | bit_num(in_bytes, 7, 0)
     )
     state[1] = (
-            bit_num(in_bytes, 56, 31) | bit_num(in_bytes, 48, 30) | bit_num(in_bytes, 40, 29) |
-            bit_num(in_bytes, 32, 28) | bit_num(in_bytes, 24, 27) | bit_num(in_bytes, 16, 26) |
-            bit_num(in_bytes, 8, 25) | bit_num(in_bytes, 0, 24) | bit_num(in_bytes, 58, 23) |
-            bit_num(in_bytes, 50, 22) | bit_num(in_bytes, 42, 21) | bit_num(in_bytes, 34, 20) |
-            bit_num(in_bytes, 26, 19) | bit_num(in_bytes, 18, 18) | bit_num(in_bytes, 10, 17) |
-            bit_num(in_bytes, 2, 16) | bit_num(in_bytes, 60, 15) | bit_num(in_bytes, 52, 14) |
-            bit_num(in_bytes, 44, 13) | bit_num(in_bytes, 36, 12) | bit_num(in_bytes, 28, 11) |
-            bit_num(in_bytes, 20, 10) | bit_num(in_bytes, 12, 9) | bit_num(in_bytes, 4, 8) |
-            bit_num(in_bytes, 62, 7) | bit_num(in_bytes, 54, 6) | bit_num(in_bytes, 47, 5) |
-            bit_num(in_bytes, 39, 4) | bit_num(in_bytes, 30, 3) | bit_num(in_bytes, 22, 2) |
-            bit_num(in_bytes, 14, 1) | bit_num(in_bytes, 6, 0)
+        bit_num(in_bytes, 56, 31) | bit_num(in_bytes, 48, 30) | bit_num(in_bytes, 40, 29) |
+        bit_num(in_bytes, 32, 28) | bit_num(in_bytes, 24, 27) | bit_num(in_bytes, 16, 26) |
+        bit_num(in_bytes, 8, 25) | bit_num(in_bytes, 0, 24) | bit_num(in_bytes, 58, 23) |
+        bit_num(in_bytes, 50, 22) | bit_num(in_bytes, 42, 21) | bit_num(in_bytes, 34, 20) |
+        bit_num(in_bytes, 26, 19) | bit_num(in_bytes, 18, 18) | bit_num(in_bytes, 10, 17) |
+        bit_num(in_bytes, 2, 16) | bit_num(in_bytes, 60, 15) | bit_num(in_bytes, 52, 14) |
+        bit_num(in_bytes, 44, 13) | bit_num(in_bytes, 36, 12) | bit_num(in_bytes, 28, 11) |
+        bit_num(in_bytes, 20, 10) | bit_num(in_bytes, 12, 9) | bit_num(in_bytes, 4, 8) |
+        bit_num(in_bytes, 62, 7) | bit_num(in_bytes, 54, 6) | bit_num(in_bytes, 46, 5) |
+        bit_num(in_bytes, 38, 4) | bit_num(in_bytes, 30, 3) | bit_num(in_bytes, 22, 2) |
+        bit_num(in_bytes, 14, 1) | bit_num(in_bytes, 6, 0)
     )
     return state
 
-def inv_ip(state: list, in_bytes: bytearray):
+
+def inv_ip(state: List[int], in_bytes: bytearray):
     in_bytes[3] = (
-            bit_num_int_r(state[1], 7, 7) | bit_num_int_r(state[0], 7, 6) |
-            bit_num_int_r(state[1], 15, 5) | bit_num_int_r(state[0], 15, 4) |
-            bit_num_int_r(state[1], 23, 3) | bit_num_int_r(state[0], 23, 2) |
-            bit_num_int_r(state[1], 31, 1) | bit_num_int_r(state[0], 31, 0)
+        bit_num_int_r(state[1], 7, 7) | bit_num_int_r(state[0], 7, 6) |
+        bit_num_int_r(state[1], 15, 5) | bit_num_int_r(state[0], 15, 4) |
+        bit_num_int_r(state[1], 23, 3) | bit_num_int_r(state[0], 23, 2) |
+        bit_num_int_r(state[1], 31, 1) | bit_num_int_r(state[0], 31, 0)
     )
     in_bytes[2] = (
-            bit_num_int_r(state[1], 6, 7) | bit_num_int_r(state[0], 6, 6) |
-            bit_num_int_r(state[1], 14, 5) | bit_num_int_r(state[0], 14, 4) |
-            bit_num_int_r(state[1], 22, 3) | bit_num_int_r(state[0], 22, 2) |
-            bit_num_int_r(state[1], 30, 1) | bit_num_int_r(state[0], 30, 0)
+        bit_num_int_r(state[1], 6, 7) | bit_num_int_r(state[0], 6, 6) |
+        bit_num_int_r(state[1], 14, 5) | bit_num_int_r(state[0], 14, 4) |
+        bit_num_int_r(state[1], 22, 3) | bit_num_int_r(state[0], 22, 2) |
+        bit_num_int_r(state[1], 30, 1) | bit_num_int_r(state[0], 30, 0)
     )
     in_bytes[1] = (
-            bit_num_int_r(state[1], 5, 7) | bit_num_int_r(state[0], 5, 6) |
-            bit_num_int_r(state[1], 13, 5) | bit_num_int_r(state[0], 13, 4) |
-            bit_num_int_r(state[1], 21, 3) | bit_num_int_r(state[0], 21, 2) |
-            bit_num_int_r(state[1], 29, 1) | bit_num_int_r(state[0], 29, 0)
+        bit_num_int_r(state[1], 5, 7) | bit_num_int_r(state[0], 5, 6) |
+        bit_num_int_r(state[1], 13, 5) | bit_num_int_r(state[0], 13, 4) |
+        bit_num_int_r(state[1], 21, 3) | bit_num_int_r(state[0], 21, 2) |
+        bit_num_int_r(state[1], 29, 1) | bit_num_int_r(state[0], 29, 0)
     )
     in_bytes[0] = (
-            bit_num_int_r(state[1], 4, 7) | bit_num_int_r(state[0], 4, 6) |
-            bit_num_int_r(state[1], 12, 5) | bit_num_int_r(state[0], 12, 4) |
-            bit_num_int_r(state[1], 20, 3) | bit_num_int_r(state[0], 20, 2) |
-            bit_num_int_r(state[1], 28, 1) | bit_num_int_r(state[0], 28, 0)
+        bit_num_int_r(state[1], 4, 7) | bit_num_int_r(state[0], 4, 6) |
+        bit_num_int_r(state[1], 12, 5) | bit_num_int_r(state[0], 12, 4) |
+        bit_num_int_r(state[1], 20, 3) | bit_num_int_r(state[0], 20, 2) |
+        bit_num_int_r(state[1], 28, 1) | bit_num_int_r(state[0], 28, 0)
     )
     in_bytes[7] = (
-            bit_num_int_r(state[1], 3, 7) | bit_num_int_r(state[0], 3, 6) |
-            bit_num_int_r(state[1], 11, 5) | bit_num_int_r(state[0], 11, 4) |
-            bit_num_int_r(state[1], 19, 3) | bit_num_int_r(state[0], 19, 2) |
-            bit_num_int_r(state[1], 27, 1) | bit_num_int_r(state[0], 27, 0)
+        bit_num_int_r(state[1], 3, 7) | bit_num_int_r(state[0], 3, 6) |
+        bit_num_int_r(state[1], 11, 5) | bit_num_int_r(state[0], 11, 4) |
+        bit_num_int_r(state[1], 19, 3) | bit_num_int_r(state[0], 19, 2) |
+        bit_num_int_r(state[1], 27, 1) | bit_num_int_r(state[0], 27, 0)
     )
     in_bytes[6] = (
-            bit_num_int_r(state[1], 2, 7) | bit_num_int_r(state[0], 2, 6) |
-            bit_num_int_r(state[1], 10, 5) | bit_num_int_r(state[0], 10, 4) |
-            bit_num_int_r(state[1], 18, 3) | bit_num_int_r(state[0], 18, 2) |
-            bit_num_int_r(state[1], 26, 1) | bit_num_int_r(state[0], 26, 0)
+        bit_num_int_r(state[1], 2, 7) | bit_num_int_r(state[0], 2, 6) |
+        bit_num_int_r(state[1], 10, 5) | bit_num_int_r(state[0], 10, 4) |
+        bit_num_int_r(state[1], 18, 3) | bit_num_int_r(state[0], 18, 2) |
+        bit_num_int_r(state[1], 26, 1) | bit_num_int_r(state[0], 26, 0)
     )
     in_bytes[5] = (
-            bit_num_int_r(state[1], 1, 7) | bit_num_int_r(state[0], 1, 6) |
-            bit_num_int_r(state[1], 9, 5) | bit_num_int_r(state[0], 9, 4) |
-            bit_num_int_r(state[1], 17, 3) | bit_num_int_r(state[0], 17, 2) |
-            bit_num_int_r(state[1], 25, 1) | bit_num_int_r(state[0], 25, 0)
+        bit_num_int_r(state[1], 1, 7) | bit_num_int_r(state[0], 1, 6) |
+        bit_num_int_r(state[1], 9, 5) | bit_num_int_r(state[0], 9, 4) |
+        bit_num_int_r(state[1], 17, 3) | bit_num_int_r(state[0], 17, 2) |
+        bit_num_int_r(state[1], 25, 1) | bit_num_int_r(state[0], 25, 0)
     )
     in_bytes[4] = (
-            bit_num_int_r(state[1], 0, 7) | bit_num_int_r(state[0], 0, 6) |
-            bit_num_int_r(state[1], 8, 5) | bit_num_int_r(state[0], 8, 4) |
-            bit_num_int_r(state[1], 16, 3) | bit_num_int_r(state[0], 16, 2) |
-            bit_num_int_r(state[1], 24, 1) | bit_num_int_r(state[0], 24, 0)
+        bit_num_int_r(state[1], 0, 7) | bit_num_int_r(state[0], 0, 6) |
+        bit_num_int_r(state[1], 8, 5) | bit_num_int_r(state[0], 8, 4) |
+        bit_num_int_r(state[1], 16, 3) | bit_num_int_r(state[0], 16, 2) |
+        bit_num_int_r(state[1], 24, 1) | bit_num_int_r(state[0], 24, 0)
     )
     return in_bytes
 
-def f(state: int, key: list) -> int:
+
+def f(state: int, key: List[int]) -> int:
     lrgstate = [0] * 6
 
     # Expansion Permutation
@@ -218,7 +227,8 @@ def f(state: int, key: list) -> int:
 
     return state
 
-def des_key_setup(key: bytearray, schedule: list, mode: DESMode):
+
+def des_key_setup(key: bytearray, schedule: List[List[int]], mode: DESMode):
     key_rnd_shift = [1, 1, 2, 2, 2, 2, 2, 2, 1, 2, 2, 2, 2, 2, 2, 1]
     key_perm_c = [56, 48, 40, 32, 24, 16, 8, 0, 57, 49, 41, 33, 25, 17,
                   9, 1, 58, 50, 42, 34, 26, 18, 10, 2, 59, 51, 43, 35]
@@ -229,14 +239,14 @@ def des_key_setup(key: bytearray, schedule: list, mode: DESMode):
                        40, 51, 30, 36, 46, 54, 29, 39, 50, 44, 32, 47,
                        43, 48, 38, 55, 33, 52, 45, 41, 49, 35, 28, 31]
 
-    # Permutated Choice #1 (copy the key in, ignoring parity bits).
+    # Permutated Choice #1
     c = 0
     d = 0
     for i in range(28):
         c |= bit_num(key, key_perm_c[i], 31 - i)
         d |= bit_num(key, key_perm_d[i], 31 - i)
 
-    # Generate the 16 subkeys.
+    # Generate the 16 subkeys
     for i in range(16):
         c = ((c << key_rnd_shift[i]) | (c >> (28 - key_rnd_shift[i]))) & 0xfffffff0
         d = ((d << key_rnd_shift[i]) | (d >> (28 - key_rnd_shift[i]))) & 0xfffffff0
@@ -250,9 +260,9 @@ def des_key_setup(key: bytearray, schedule: list, mode: DESMode):
             schedule[to_gen][j // 8] |= bit_num_int_r(c, key_compression[j], 7 - (j % 8))
         for j in range(24, 48):
             schedule[to_gen][j // 8] |= bit_num_int_r(d, key_compression[j] - 27, 7 - (j % 8))
-    return 0
 
-def des_crypt(input_bytes: bytearray, key_schedule: list):
+
+def des_crypt(input_bytes: bytearray, key_schedule: List[List[int]]):
     state = [0, 0]
 
     # Initial Permutation
@@ -271,9 +281,12 @@ def des_crypt(input_bytes: bytearray, key_schedule: list):
     inv_ip(state, input_bytes)
     return input_bytes
 
+
+# 密钥定义
 KEY1 = b"!@#)(NHLiuy*$%^&"
 KEY2 = b"123ZXC!@#)(*$%^&"
 KEY3 = b"!@#)(*$%^&abcDEF"
+
 
 def func_des(buff: bytearray, key: bytes, length: int) -> bytearray:
     schedule = [[0] * 6 for _ in range(16)]
@@ -283,6 +296,7 @@ def func_des(buff: bytearray, key: bytes, length: int) -> bytearray:
         output += des_crypt(buff[i:i + 8], schedule)
     return output
 
+
 def func_ddes(buff: bytearray, key: bytes, length: int) -> bytearray:
     schedule = [[0] * 6 for _ in range(16)]
     des_key_setup(bytearray(key), schedule, DESMode.DES_DECRYPT)
@@ -291,11 +305,13 @@ def func_ddes(buff: bytearray, key: bytes, length: int) -> bytearray:
         output += des_crypt(buff[i:i + 8], schedule)
     return output
 
+
 def lyric_decode(content: bytearray, length: int) -> bytearray:
     content = func_ddes(content, KEY1, length)
     content = func_des(content, KEY2, length)
     content = func_ddes(content, KEY3, length)
     return content
+
 
 def decrypt_qq_lyric(encrypted_hex: str) -> str:
     """解密QQ音乐歌词的完整函数"""
@@ -304,20 +320,20 @@ def decrypt_qq_lyric(encrypted_hex: str) -> str:
     decompressed_data = zlib.decompress(decrypted_data)
     return decompressed_data.decode('utf-8')
 
-# === DES 解密部分结束 ===
 
-# === HTTP 处理部分开始 ===
-def handle_request(event, context):
-    """Vercel Serverless 函数入口点"""
+# ================ Vercel Handler 函数 ================
+
+def handler(request, context):
+    """Vercel Serverless 函数入口"""
     # 解析查询参数
-    query = event.get('queryStringParameters', {}) or {}
-    musicid = query.get('musicid')
+    query_params = request.get('query', {})
+    musicid = query_params.get('musicid')
     
     if not musicid:
         return {
             'statusCode': 400,
             'headers': {
-                'Content-Type': 'application/json; charset=utf-8',
+                'Content-Type': 'application/json',
                 'Access-Control-Allow-Origin': '*',
                 'Access-Control-Allow-Methods': 'GET, OPTIONS',
                 'Access-Control-Allow-Headers': 'Content-Type'
@@ -368,7 +384,7 @@ def handle_request(event, context):
                 return {
                     'statusCode': 404,
                     'headers': {
-                        'Content-Type': 'application/json; charset=utf-8',
+                        'Content-Type': 'application/json',
                         'Access-Control-Allow-Origin': '*'
                     },
                     'body': json.dumps({
@@ -398,7 +414,7 @@ def handle_request(event, context):
                 return {
                     'statusCode': 200,
                     'headers': {
-                        'Content-Type': 'application/json; charset=utf-8',
+                        'Content-Type': 'application/json',
                         'Access-Control-Allow-Origin': '*'
                     },
                     'body': json.dumps(result, ensure_ascii=False)
@@ -408,23 +424,22 @@ def handle_request(event, context):
                 return {
                     'statusCode': 500,
                     'headers': {
-                        'Content-Type': 'application/json; charset=utf-8',
+                        'Content-Type': 'application/json',
                         'Access-Control-Allow-Origin': '*'
                     },
                     'body': json.dumps({
                         'success': False,
                         'error': '歌词解密失败',
                         'message': str(decrypt_error),
-                        'musicid': musicid,
-                        'raw_lyric': data['lyric'][:100] + '...' if len(data['lyric']) > 100 else data['lyric']
+                        'musicid': musicid
                     }, ensure_ascii=False)
                 }
                 
     except urllib.error.HTTPError as http_err:
         return {
-            'statusCode': http_err.code,
+            'statusCode': 500,
             'headers': {
-                'Content-Type': 'application/json; charset=utf-8',
+                'Content-Type': 'application/json',
                 'Access-Control-Allow-Origin': '*'
             },
             'body': json.dumps({
@@ -439,7 +454,7 @@ def handle_request(event, context):
         return {
             'statusCode': 500,
             'headers': {
-                'Content-Type': 'application/json; charset=utf-8',
+                'Content-Type': 'application/json',
                 'Access-Control-Allow-Origin': '*'
             },
             'body': json.dumps({
@@ -454,7 +469,7 @@ def handle_request(event, context):
         return {
             'statusCode': 500,
             'headers': {
-                'Content-Type': 'application/json; charset=utf-8',
+                'Content-Type': 'application/json',
                 'Access-Control-Allow-Origin': '*'
             },
             'body': json.dumps({
@@ -465,6 +480,6 @@ def handle_request(event, context):
             }, ensure_ascii=False)
         }
 
-# Vercel 需要这个函数名
-def app(event, context):
-    return handle_request(event, context)
+
+# Vercel 需要这个变量
+app = handler
