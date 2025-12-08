@@ -3,6 +3,7 @@ import urllib.request
 import json
 import zlib
 from enum import Enum
+import time
 
 app = Flask(__name__)
 
@@ -314,14 +315,49 @@ def decrypt_qq_lyric(encrypted_hex: str) -> str:
     except Exception as e:
         raise Exception(f"解密失败: {str(e)}")
 
+# ================ 辅助函数 ================
+def parse_qq_response(response_data: str):
+    """解析QQ音乐API的响应，处理JSONP格式"""
+    # 尝试去除可能的空白字符
+    response_data = response_data.strip()
+    
+    # 处理JSONP格式 (callback({...}))
+    if response_data.startswith('callback(') and response_data.endswith(')'):
+        response_data = response_data[9:-1]
+    elif response_data.startswith('MusicJsonCallback(') and response_data.endswith(')'):
+        response_data = response_data[18:-1]
+    elif response_data.startswith('jsonCallback(') and response_data.endswith(')'):
+        response_data = response_data[13:-1]
+    
+    # 尝试解析JSON
+    try:
+        return json.loads(response_data)
+    except json.JSONDecodeError as e:
+        # 如果解析失败，尝试修复常见的JSON格式问题
+        try:
+            # 尝试处理可能的多余字符
+            if response_data.startswith('{') and response_data.endswith('}'):
+                return json.loads(response_data)
+            else:
+                # 尝试查找第一个 { 和最后一个 }
+                start = response_data.find('{')
+                end = response_data.rfind('}')
+                if start != -1 and end != -1 and end > start:
+                    return json.loads(response_data[start:end+1])
+                else:
+                    raise e
+        except Exception:
+            raise ValueError(f"无法解析QQ音乐响应: {response_data[:200]}...")
+
 # ================ Flask 路由 ================
 @app.route('/')
 def index():
     return jsonify({
         'name': 'QQ音乐歌词解密API',
-        'version': '1.0.0',
+        'version': '1.1.0',
         'usage': 'GET /api/lyrics?musicid=歌曲ID',
-        'example': '/api/lyrics?musicid=123456'
+        'example': '/api/lyrics?musicid=213836590',
+        'timestamp': int(time.time())
     })
 
 @app.route('/api/lyrics', methods=['GET', 'OPTIONS'])
@@ -340,62 +376,133 @@ def get_lyrics():
         }), 400
     
     try:
-        # 构建 QQ 音乐 API 请求 URL
-        api_url = 'https://c.y.qq.com/qqmusic/fcgi-bin/lyric_download.fcg'
+        # 构建 QQ 音乐 API 请求 URL - 使用更可靠的接口
+        api_url = 'https://c.y.qq.com/lyric/fcgi-bin/fcg_query_lyric_new.fcg'
         params = {
-            'musicid': musicid,
-            'version': '15',
-            'miniversion': '82',
-            'lrctype': '4'
+            'songmid': musicid,  # 注意：这里用的是songmid，不是musicid
+            'format': 'json',
+            'inCharset': 'utf8',
+            'outCharset': 'utf-8',
+            'platform': 'yqq',
+            'hostUin': 0,
+            'needNewCode': 0
         }
         
         import urllib.parse
         url_with_params = f"{api_url}?{urllib.parse.urlencode(params)}"
         
-        # 设置请求头
+        # 设置更完整的请求头，模拟浏览器
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             'Referer': 'https://y.qq.com/',
-            'Accept': 'application/json, text/plain, */*'
+            'Accept': 'application/json, text/javascript, */*; q=0.01',
+            'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Connection': 'keep-alive',
+            'Host': 'c.y.qq.com',
+            'Sec-Fetch-Dest': 'empty',
+            'Sec-Fetch-Mode': 'cors',
+            'Sec-Fetch-Site': 'same-site',
+            'Pragma': 'no-cache',
+            'Cache-Control': 'no-cache',
+            'DNT': '1',
+            'Sec-Ch-Ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+            'Sec-Ch-Ua-Mobile': '?0',
+            'Sec-Ch-Ua-Platform': '"Windows"'
         }
         
         # 发送请求到 QQ 音乐 API
         req = urllib.request.Request(url_with_params, headers=headers)
         
-        with urllib.request.urlopen(req, timeout=10) as response:
+        with urllib.request.urlopen(req, timeout=15) as response:
             # 解析响应
-            response_data = response.read().decode('utf-8')
+            response_data = response.read().decode('utf-8', errors='ignore')
             
-            # QQ 音乐 API 返回的是 JSONP 格式，需要提取 JSON
-            if response_data.startswith('callback('):
-                json_str = response_data[9:-2]  # 移除 callback() 包装
-            else:
-                json_str = response_data
-            
-            data = json.loads(json_str)
-            
-            # 检查是否获取到歌词
-            if 'lyric' not in data or not data['lyric']:
+            # 如果响应为空
+            if not response_data:
                 return jsonify({
                     'success': False,
-                    'error': '未找到歌词',
+                    'error': 'QQ音乐API返回空响应',
                     'musicid': musicid
                 }), 404
             
+            # 解析响应数据
             try:
-                # 解密歌词
-                decrypted_lyric = decrypt_qq_lyric(data['lyric'])
+                data = parse_qq_response(response_data)
+            except Exception as parse_error:
+                # 返回原始响应前200字符用于调试
+                return jsonify({
+                    'success': False,
+                    'error': '解析QQ音乐响应失败',
+                    'message': str(parse_error),
+                    'musicid': musicid,
+                    'raw_response': response_data[:500] if len(response_data) > 500 else response_data
+                }), 500
+            
+            # 检查是否获取到歌词
+            if 'lyric' not in data or not data.get('lyric'):
+                # 尝试不同的字段名
+                lyric_key = None
+                for key in ['lyric', 'content', 'lyricBase64', 'lyric_utf8']:
+                    if key in data and data[key]:
+                        lyric_key = key
+                        break
+                
+                if not lyric_key:
+                    return jsonify({
+                        'success': False,
+                        'error': '未找到歌词',
+                        'musicid': musicid,
+                        'response_keys': list(data.keys()) if isinstance(data, dict) else []
+                    }), 404
+                
+                lyric_data = data[lyric_key]
+            else:
+                lyric_data = data['lyric']
+            
+            try:
+                # 歌词可能是base64编码的
+                import base64
+                try:
+                    # 尝试base64解码
+                    if lyric_data.startswith('LyricContent='):
+                        lyric_data = lyric_data[13:]
+                    
+                    # 尝试base64解码
+                    try:
+                        lyric_hex = base64.b64decode(lyric_data).hex()
+                    except:
+                        # 如果不是base64，直接使用
+                        lyric_hex = lyric_data
+                    
+                    # 解密歌词
+                    decrypted_lyric = decrypt_qq_lyric(lyric_hex)
+                    
+                except Exception as decode_error:
+                    # 如果解密失败，尝试直接返回原始歌词（可能是明文的）
+                    return jsonify({
+                        'success': True,
+                        'musicid': musicid,
+                        'lyric': lyric_data,
+                        'translation': data.get('trans', '') or data.get('tran', ''),
+                        'source': 'qq',
+                        'info': {
+                            'song_name': data.get('songname', '') or data.get('name', ''),
+                            'singer': data.get('singer', '') or data.get('singer_name', '')
+                        },
+                        'note': '歌词未加密，直接返回'
+                    })
                 
                 # 构建响应
                 result = {
                     'success': True,
                     'musicid': musicid,
                     'lyric': decrypted_lyric,
-                    'translation': data.get('trans', ''),
+                    'translation': data.get('trans', '') or data.get('tran', ''),
                     'source': 'qq',
                     'info': {
-                        'song_name': data.get('songname', ''),
-                        'singer': data.get('singer', '')
+                        'song_name': data.get('songname', '') or data.get('name', ''),
+                        'singer': data.get('singer', '') or data.get('singer_name', '')
                     }
                 }
                 
@@ -407,7 +514,7 @@ def get_lyrics():
                     'error': '歌词解密失败',
                     'message': str(decrypt_error),
                     'musicid': musicid,
-                    'raw_lyric': data['lyric'][:100] + '...' if len(data['lyric']) > 100 else data['lyric']
+                    'raw_lyric': lyric_data[:200] + '...' if len(lyric_data) > 200 else lyric_data
                 }), 500
                 
     except urllib.error.HTTPError as http_err:
@@ -416,7 +523,7 @@ def get_lyrics():
             'error': f'HTTP 错误: {http_err.code}',
             'message': str(http_err.reason),
             'musicid': musicid
-        }), 500
+        }), http_err.code if http_err.code >= 400 else 500
         
     except urllib.error.URLError as url_err:
         return jsonify({
@@ -431,7 +538,8 @@ def get_lyrics():
             'success': False,
             'error': '服务器内部错误',
             'message': str(e),
-            'musicid': musicid
+            'musicid': musicid,
+            'traceback': str(type(e).__name__)
         }), 500
 
 @app.route('/api/test', methods=['GET'])
@@ -440,11 +548,58 @@ def test():
     return jsonify({
         'success': True,
         'message': 'API 运行正常',
-        'timestamp': '2023-01-01T00:00:00Z'
+        'timestamp': int(time.time()),
+        'endpoints': {
+            'get_lyrics': '/api/lyrics?musicid=歌曲ID',
+            'test': '/api/test',
+            'home': '/'
+        }
     })
+
+@app.route('/api/debug/<musicid>', methods=['GET'])
+def debug_lyric(musicid):
+    """调试接口，返回原始响应"""
+    try:
+        # 使用旧的接口尝试
+        api_url = 'https://c.y.qq.com/qqmusic/fcgi-bin/lyric_download.fcg'
+        params = {
+            'musicid': musicid,
+            'version': '15',
+            'miniversion': '82',
+            'lrctype': '4'
+        }
+        
+        import urllib.parse
+        url_with_params = f"{api_url}?{urllib.parse.urlencode(params)}"
+        
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Referer': 'https://y.qq.com/'
+        }
+        
+        req = urllib.request.Request(url_with_params, headers=headers)
+        
+        with urllib.request.urlopen(req, timeout=10) as response:
+            response_data = response.read().decode('utf-8', errors='ignore')
+            
+            return jsonify({
+                'success': True,
+                'musicid': musicid,
+                'url': url_with_params,
+                'response_length': len(response_data),
+                'response_preview': response_data[:1000] if len(response_data) > 1000 else response_data,
+                'is_json': response_data.strip().startswith('{') or response_data.strip().startswith('callback(')
+            })
+            
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'musicid': musicid
+        }), 500
 
 # Vercel 需要这个变量
 application = app
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(debug=True, host='0.0.0.0', port=3000)
