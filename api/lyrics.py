@@ -357,10 +357,44 @@ def decrypt_qq_lyric(encrypted_hex):
         decrypted_data = triple_des_crypt(encrypted_bytes, schedule)
         
         # 5. Zlib解压
-        decompressed = zlib.decompress(decrypted_data)
+        try:
+            decompressed = zlib.decompress(decrypted_data)
+        except zlib.error:
+            # 如果解压失败，可能是数据已经解密，直接使用
+            decompressed = decrypted_data
         
-        # 6. 返回UTF-8字符串
-        return decompressed.decode('utf-8')
+        # 6. 尝试多种编码解码，保留所有字符（包括控制字符）
+        result = None
+        
+        # 首先尝试UTF-8
+        try:
+            result = decompressed.decode('utf-8')
+        except UnicodeDecodeError:
+            pass
+        
+        # 如果UTF-8失败，尝试GBK/GB2312（QQ音乐可能使用中文编码）
+        if result is None:
+            try:
+                result = decompressed.decode('gbk')
+            except UnicodeDecodeError:
+                pass
+        
+        # 如果还是失败，使用replace模式忽略错误
+        if result is None:
+            try:
+                result = decompressed.decode('utf-8', errors='replace')
+            except:
+                # 最后尝试使用latin-1（不会失败）
+                result = decompressed.decode('latin-1')
+        
+        # 7. 修复换行符：确保 \r\n 和 \r 都被转换为 \n
+        result = result.replace('\r\n', '\n').replace('\r', '\n')
+        
+        # 8. 移除BOM字符（如果有）
+        if result.startswith('\ufeff'):
+            result = result[1:]
+        
+        return result
         
     except Exception as e:
         raise Exception(f"解密失败: {str(e)}")
@@ -538,14 +572,15 @@ def get_lyrics_by_musicid(musicid):
 def index():
     return json_response({
         'name': 'QQ音乐歌词解密API',
-        'version': '2.0.0',
+        'version': '2.1.0',
         'endpoints': {
             '/api/lyrics?musicid=<musicid>': '通过musicid获取歌词',
             '/api/lyrics/mid?mid=<mid>': '通过mid获取歌词',
             '/api/test': '测试接口',
             '/api/debug?hex=<hex>': '调试接口（直接解密）'
         },
-        'example': '/api/lyrics?musicid=213836590'
+        'example': '/api/lyrics?musicid=213836590',
+        'note': '修复了逐字歌词换行符问题'
     })
 
 @app.route('/api/lyrics', methods=['GET'])
@@ -581,13 +616,19 @@ def get_lyrics_by_id():
         if translation and translation.startswith('\ufeff'):
             translation = translation[1:]
         
+        # 确保翻译也有正确的换行符（虽然通常已经有了）
+        if translation:
+            translation = translation.replace('\r\n', '\n').replace('\r', '\n')
+        
         return json_response({
             'success': True,
             'musicid': musicid,
             'lyrics': lyrics,
             'translation': translation,
             'has_lyrics': bool(lyrics),
-            'has_translation': bool(translation)
+            'has_translation': bool(translation),
+            'lyrics_lines': len(lyrics.split('\n')) if lyrics else 0,
+            'translation_lines': len(translation.split('\n')) if translation else 0
         })
         
     except Exception as e:
@@ -639,11 +680,15 @@ def get_lyrics_by_mid():
         lyrics = result.get('lyrics', '')
         translation = result.get('trans', '')
         
-        # 处理BOM字符
+        # 处理BOM字符和换行符
         if lyrics and lyrics.startswith('\ufeff'):
             lyrics = lyrics[1:]
         if translation and translation.startswith('\ufeff'):
             translation = translation[1:]
+        
+        # 确保翻译也有正确的换行符
+        if translation:
+            translation = translation.replace('\r\n', '\n').replace('\r', '\n')
         
         return json_response({
             'success': True,
@@ -653,6 +698,8 @@ def get_lyrics_by_mid():
             'translation': translation,
             'has_lyrics': bool(lyrics),
             'has_translation': bool(translation),
+            'lyrics_lines': len(lyrics.split('\n')) if lyrics else 0,
+            'translation_lines': len(translation.split('\n')) if translation else 0,
             'song_info': {
                 'id': musicid,
                 'mid': mid,
@@ -705,7 +752,10 @@ def debug():
             'original_length': len(hex_str),
             'decrypted_length': len(decrypted),
             'decrypted': decrypted[:500] + '...' if len(decrypted) > 500 else decrypted,
-            'is_xml': '<?xml' in decrypted[:20]
+            'is_xml': '<?xml' in decrypted[:20],
+            'has_newlines': '\n' in decrypted,
+            'has_carriage_return': '\r' in decrypted,
+            'newline_count': decrypted.count('\n')
         })
     except Exception as e:
         import traceback
@@ -714,6 +764,41 @@ def debug():
             'error': str(e),
             'traceback': traceback.format_exc() if app.debug else None
         }, 500)
+
+@app.route('/api/format/lyrics', methods=['POST'])
+def format_lyrics():
+    """格式化歌词接口"""
+    data = request.get_json()
+    if not data or 'lyrics' not in data:
+        return json_response({
+            'success': False,
+            'error': '缺少lyrics参数'
+        }, 400)
+    
+    lyrics = data['lyrics']
+    
+    # 尝试美化逐字歌词格式
+    # 1. 在时间标签后面添加换行
+    import re
+    
+    # 匹配时间标签如 [ti:...], [ar:...], [al:...], [by:...], [offset:0], [kana:...]
+    lyrics = re.sub(r'(\[[a-z]+:[^\]]*\])', r'\1\n', lyrics)
+    
+    # 2. 匹配逐字歌词的时间标签如 [0,4690]
+    lyrics = re.sub(r'(\[\d+,\d+\])', r'\n\1', lyrics)
+    
+    # 3. 移除多余的换行
+    lyrics = re.sub(r'\n{3,}', '\n\n', lyrics)
+    
+    # 4. 修剪开头和结尾的空白
+    lyrics = lyrics.strip()
+    
+    return json_response({
+        'success': True,
+        'original_length': len(data['lyrics']),
+        'formatted_length': len(lyrics),
+        'formatted_lyrics': lyrics
+    })
 
 # 用于Vercel
 application = app
