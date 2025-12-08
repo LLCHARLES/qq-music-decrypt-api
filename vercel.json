@@ -1,37 +1,19 @@
 {
-  "builds": [
-    {
-      "src": "api/lyrics.py",
-      "use": "@vercel/python"
+  "functions": {
+    "api/lyrics.py": {
+      "runtime": "python3.9",
+      "maxDuration": 30,
+      "memory": 1024
     }
-  ],
+  },
   "rewrites": [
     {
-      "source": "/api/lyrics",
+      "source": "/api/(.*)",
       "destination": "/api/lyrics.py"
     },
     {
-      "source": "/lyrics",
-      "destination": "/api/lyrics.py"
-    }
-  ],
-  "headers": [
-    {
       "source": "/(.*)",
-      "headers": [
-        {
-          "key": "Access-Control-Allow-Origin",
-          "value": "*"
-        },
-        {
-          "key": "Access-Control-Allow-Methods",
-          "value": "GET, OPTIONS"
-        },
-        {
-          "key": "Access-Control-Allow-Headers",
-          "value": "Content-Type"
-        }
-      ]
+      "destination": "/api/lyrics.py"
     }
   ]
 }
