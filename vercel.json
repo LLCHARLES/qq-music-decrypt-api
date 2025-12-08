@@ -1,7 +1,6 @@
 {
   "functions": {
     "api/lyrics.py": {
-      "runtime": "python3.9",
       "maxDuration": 10
     }
   },
@@ -32,6 +31,12 @@
           "value": "Content-Type"
         }
       ]
+    }
+  ],
+  "builds": [
+    {
+      "src": "api/lyrics.py",
+      "use": "@vercel/python"
     }
   ]
 }
