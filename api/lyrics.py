@@ -1,10 +1,12 @@
-import json
-import urllib.parse
+from flask import Flask, request, jsonify
+from flask_cors import CORS
 import urllib.request
-import urllib.error
+import json
 import zlib
 from enum import Enum
-from typing import List
+
+app = Flask(__name__)
+CORS(app)  # 启用 CORS
 
 # ================ DES 算法实现 (完整复制) ================
 
@@ -95,7 +97,7 @@ s_box8 = [
 ]
 
 
-def ip(state: List[int], in_bytes: bytearray):
+def ip(state: list, in_bytes: bytearray):
     state[0] = (
         bit_num(in_bytes, 57, 31) | bit_num(in_bytes, 49, 30) | bit_num(in_bytes, 41, 29) |
         bit_num(in_bytes, 33, 28) | bit_num(in_bytes, 25, 27) | bit_num(in_bytes, 17, 26) |
@@ -125,7 +127,7 @@ def ip(state: List[int], in_bytes: bytearray):
     return state
 
 
-def inv_ip(state: List[int], in_bytes: bytearray):
+def inv_ip(state: list, in_bytes: bytearray):
     in_bytes[3] = (
         bit_num_int_r(state[1], 7, 7) | bit_num_int_r(state[0], 7, 6) |
         bit_num_int_r(state[1], 15, 5) | bit_num_int_r(state[0], 15, 4) |
@@ -177,7 +179,7 @@ def inv_ip(state: List[int], in_bytes: bytearray):
     return in_bytes
 
 
-def f(state: int, key: List[int]) -> int:
+def f(state: int, key: list) -> int:
     lrgstate = [0] * 6
 
     # Expansion Permutation
@@ -228,7 +230,7 @@ def f(state: int, key: List[int]) -> int:
     return state
 
 
-def des_key_setup(key: bytearray, schedule: List[List[int]], mode: DESMode):
+def des_key_setup(key: bytearray, schedule: list, mode: DESMode):
     key_rnd_shift = [1, 1, 2, 2, 2, 2, 2, 2, 1, 2, 2, 2, 2, 2, 2, 1]
     key_perm_c = [56, 48, 40, 32, 24, 16, 8, 0, 57, 49, 41, 33, 25, 17,
                   9, 1, 58, 50, 42, 34, 26, 18, 10, 2, 59, 51, 43, 35]
@@ -262,7 +264,7 @@ def des_key_setup(key: bytearray, schedule: List[List[int]], mode: DESMode):
             schedule[to_gen][j // 8] |= bit_num_int_r(d, key_compression[j] - 27, 7 - (j % 8))
 
 
-def des_crypt(input_bytes: bytearray, key_schedule: List[List[int]]):
+def des_crypt(input_bytes: bytearray, key_schedule: list):
     state = [0, 0]
 
     # Initial Permutation
@@ -315,35 +317,38 @@ def lyric_decode(content: bytearray, length: int) -> bytearray:
 
 def decrypt_qq_lyric(encrypted_hex: str) -> str:
     """解密QQ音乐歌词的完整函数"""
-    encrypted_data = bytearray.fromhex(encrypted_hex)
-    decrypted_data = lyric_decode(encrypted_data, len(encrypted_data))
-    decompressed_data = zlib.decompress(decrypted_data)
-    return decompressed_data.decode('utf-8')
+    try:
+        encrypted_data = bytearray.fromhex(encrypted_hex)
+        decrypted_data = lyric_decode(encrypted_data, len(encrypted_data))
+        decompressed_data = zlib.decompress(decrypted_data)
+        return decompressed_data.decode('utf-8')
+    except Exception as e:
+        raise Exception(f"解密失败: {str(e)}")
 
 
-# ================ Vercel Handler 函数 ================
+# ================ Flask 路由 ================
 
-def handler(request, context):
-    """Vercel Serverless 函数入口"""
-    # 解析查询参数
-    query_params = request.get('query', {})
-    musicid = query_params.get('musicid')
+@app.route('/')
+def index():
+    return jsonify({
+        'name': 'QQ音乐歌词解密API',
+        'version': '1.0.0',
+        'usage': 'GET /api/lyrics?musicid=歌曲ID',
+        'example': '/api/lyrics?musicid=123456'
+    })
+
+
+@app.route('/api/lyrics', methods=['GET'])
+def get_lyrics():
+    """获取并解密歌词"""
+    musicid = request.args.get('musicid')
     
     if not musicid:
-        return {
-            'statusCode': 400,
-            'headers': {
-                'Content-Type': 'application/json',
-                'Access-Control-Allow-Origin': '*',
-                'Access-Control-Allow-Methods': 'GET, OPTIONS',
-                'Access-Control-Allow-Headers': 'Content-Type'
-            },
-            'body': json.dumps({
-                'success': False,
-                'error': '缺少 musicid 参数',
-                'usage': 'GET /api/lyrics?musicid=歌曲ID'
-            }, ensure_ascii=False)
-        }
+        return jsonify({
+            'success': False,
+            'error': '缺少 musicid 参数',
+            'usage': 'GET /api/lyrics?musicid=歌曲ID'
+        }), 400
     
     try:
         # 构建 QQ 音乐 API 请求 URL
@@ -355,6 +360,7 @@ def handler(request, context):
             'lrctype': '4'
         }
         
+        import urllib.parse
         url_with_params = f"{api_url}?{urllib.parse.urlencode(params)}"
         
         # 设置请求头
@@ -381,18 +387,11 @@ def handler(request, context):
             
             # 检查是否获取到歌词
             if 'lyric' not in data or not data['lyric']:
-                return {
-                    'statusCode': 404,
-                    'headers': {
-                        'Content-Type': 'application/json',
-                        'Access-Control-Allow-Origin': '*'
-                    },
-                    'body': json.dumps({
-                        'success': False,
-                        'error': '未找到歌词',
-                        'musicid': musicid
-                    }, ensure_ascii=False)
-                }
+                return jsonify({
+                    'success': False,
+                    'error': '未找到歌词',
+                    'musicid': musicid
+                }), 404
             
             try:
                 # 解密歌词
@@ -411,75 +410,64 @@ def handler(request, context):
                     }
                 }
                 
-                return {
-                    'statusCode': 200,
-                    'headers': {
-                        'Content-Type': 'application/json',
-                        'Access-Control-Allow-Origin': '*'
-                    },
-                    'body': json.dumps(result, ensure_ascii=False)
-                }
+                return jsonify(result)
                 
             except Exception as decrypt_error:
-                return {
-                    'statusCode': 500,
-                    'headers': {
-                        'Content-Type': 'application/json',
-                        'Access-Control-Allow-Origin': '*'
-                    },
-                    'body': json.dumps({
-                        'success': False,
-                        'error': '歌词解密失败',
-                        'message': str(decrypt_error),
-                        'musicid': musicid
-                    }, ensure_ascii=False)
-                }
+                return jsonify({
+                    'success': False,
+                    'error': '歌词解密失败',
+                    'message': str(decrypt_error),
+                    'musicid': musicid,
+                    'raw_lyric': data['lyric'][:100] + '...' if len(data['lyric']) > 100 else data['lyric']
+                }), 500
                 
     except urllib.error.HTTPError as http_err:
-        return {
-            'statusCode': 500,
-            'headers': {
-                'Content-Type': 'application/json',
-                'Access-Control-Allow-Origin': '*'
-            },
-            'body': json.dumps({
-                'success': False,
-                'error': f'HTTP 错误: {http_err.code}',
-                'message': str(http_err.reason),
-                'musicid': musicid
-            }, ensure_ascii=False)
-        }
+        return jsonify({
+            'success': False,
+            'error': f'HTTP 错误: {http_err.code}',
+            'message': str(http_err.reason),
+            'musicid': musicid
+        }), 500
         
     except urllib.error.URLError as url_err:
-        return {
-            'statusCode': 500,
-            'headers': {
-                'Content-Type': 'application/json',
-                'Access-Control-Allow-Origin': '*'
-            },
-            'body': json.dumps({
-                'success': False,
-                'error': '网络请求失败',
-                'message': str(url_err.reason),
-                'musicid': musicid
-            }, ensure_ascii=False)
-        }
+        return jsonify({
+            'success': False,
+            'error': '网络请求失败',
+            'message': str(url_err.reason),
+            'musicid': musicid
+        }), 500
         
     except Exception as e:
-        return {
-            'statusCode': 500,
-            'headers': {
-                'Content-Type': 'application/json',
-                'Access-Control-Allow-Origin': '*'
-            },
-            'body': json.dumps({
-                'success': False,
-                'error': '服务器内部错误',
-                'message': str(e),
-                'musicid': musicid
-            }, ensure_ascii=False)
-        }
+        return jsonify({
+            'success': False,
+            'error': '服务器内部错误',
+            'message': str(e),
+            'musicid': musicid
+        }), 500
+
+
+@app.route('/api/test', methods=['GET'])
+def test():
+    """测试接口，验证DES解密是否正常工作"""
+    try:
+        # 测试解密一小段歌词
+        test_hex = "6B3F43A9B333C60F"  # 简化的测试数据
+        decrypted = decrypt_qq_lyric(test_hex)
+        return jsonify({
+            'success': True,
+            'message': 'DES解密功能正常',
+            'test_data': test_hex,
+            'decrypted_length': len(decrypted)
+        })
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'message': f'DES解密测试失败: {str(e)}'
+        }), 500
 
 
 # Vercel 需要这个变量
-app = handler
+application = app
+
+if __name__ == '__main__':
+    app.run(debug=True)
