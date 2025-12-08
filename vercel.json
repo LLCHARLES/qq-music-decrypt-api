@@ -5,16 +5,14 @@
       "use": "@vercel/python"
     }
   ],
-  "routes": [
+  "rewrites": [
     {
-      "src": "/api/lyrics",
-      "dest": "/api/lyrics.py",
-      "methods": ["GET", "OPTIONS"]
+      "source": "/api/lyrics",
+      "destination": "/api/lyrics.py"
     },
     {
-      "src": "/lyrics",
-      "dest": "/api/lyrics.py",
-      "methods": ["GET", "OPTIONS"]
+      "source": "/lyrics",
+      "destination": "/api/lyrics.py"
     }
   ],
   "headers": [
