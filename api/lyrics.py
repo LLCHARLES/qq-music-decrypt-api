@@ -733,8 +733,13 @@ def parse_xml_content(xml_content):
             if contentroma_node.text:
                 try:
                     decrypted_text = decrypt_qq_lyric(contentroma_node.text.strip())
-                    # 罗马音字段是完整的XML格式，直接返回
-                    result['roma'] = decrypted_text
+                    # 罗马音字段是完整的XML格式，需要提取LyricContent属性
+                    if decrypted_text and decrypted_text.strip().startswith('<?xml'):
+                        # 从XML中提取罗马音歌词
+                        roma_lyric = extract_lyric_content_from_xml(decrypted_text)
+                        result['roma'] = roma_lyric
+                    else:
+                        result['roma'] = decrypted_text
                     if result['roma']:
                         break
                 except Exception as e:
@@ -782,36 +787,20 @@ def extract_content_with_regex(xml_content):
         encrypted = encrypted.strip()
         if encrypted:
             try:
-                # 罗马音字段是完整的XML格式，直接返回
-                result['roma'] = decrypt_qq_lyric(encrypted)
+                decrypted_text = decrypt_qq_lyric(encrypted)
+                # 罗马音字段是完整的XML格式，需要提取LyricContent属性
+                if decrypted_text and decrypted_text.strip().startswith('<?xml'):
+                    # 从XML中提取罗马音歌词
+                    roma_lyric = extract_lyric_content_from_xml(decrypted_text)
+                    result['roma'] = roma_lyric
+                else:
+                    result['roma'] = decrypted_text
                 if result['roma']:
                     break
             except Exception as e:
                 print(f"解密罗马音失败（正则）: {e}")
     
     return result
-
-def extract_roma_text_from_xml(roma_xml):
-    """从罗马音XML中提取纯文本罗马音"""
-    if not roma_xml:
-        return ''
-    
-    try:
-        # 尝试解析XML
-        root = ET.fromstring(roma_xml)
-        
-        # 查找LyricInfo标签
-        lyric_info = root.find('.//LyricInfo')
-        if lyric_info is not None and lyric_info.text:
-            # 返回LyricInfo标签内的文本内容
-            return lyric_info.text.strip()
-        else:
-            # 如果没有找到LyricInfo标签，返回整个XML
-            return roma_xml
-    except Exception as e:
-        print(f"解析罗马音XML失败: {e}")
-        # 如果解析失败，返回原始XML
-        return roma_xml
 
 # ================ 歌曲信息获取 ================
 def get_song_by_mid(mid):
@@ -1032,18 +1021,15 @@ def get_qrc_by_id(musicid):
                 result['lyrics'] = unified_filter_lyrics(result['lyrics'], 'qrc')
                 print(f"QRC歌词过滤后长度: {len(result['lyrics'])}")
             
+            if result['roma']:
+                # 罗马音也是QRC格式，需要过滤
+                result['roma'] = unified_filter_lyrics(result['roma'], 'qrc')
+                print(f"QRC罗马音过滤后长度: {len(result['roma'])}")
+            
             if result['trans']:
                 # QRC的翻译可能是LRC格式，所以使用lrc类型过滤
                 result['trans'] = unified_filter_lyrics(result['trans'], 'lrc')
                 print(f"QRC翻译过滤后长度: {len(result['trans'])}")
-            
-            # 罗马音字段是完整的XML格式，不进行过滤
-            if result['roma']:
-                print(f"QRC罗马音长度: {len(result['roma'])}")
-                # 可以选择提取罗马音文本，或者返回完整XML
-                # 这里返回完整XML，让前端解析
-                # 如果需要提取文本，可以调用 extract_roma_text_from_xml
-                # result['roma'] = extract_roma_text_from_xml(result['roma'])
             
             return result
     except Exception as e:
@@ -1056,18 +1042,14 @@ def get_qrc_by_id(musicid):
 @app.route('/')
 def index():
     return json_response({
-        'name': 'QQ音乐歌词解密API - 修复版',
-        'version': '4.2.0',
-        'description': '完整支持LRC和QRC歌词过滤，使用统一的过滤系统',
+        'name': 'QQ音乐歌词解密API',
+        'version': '1.0.0',
+        'description': 'QQ音乐歌词解密API，支持LRC和QRC歌词',
         'endpoints': {
             '/api/lyrics?id=<musicid>': '通过musicid获取所有歌词',
-            '/api/lyrics?mid=<songmid>': '通过songmid获取所有歌词',
-            '/api/test': '测试接口',
-            '/api/debug?hex=<hex>': '调试接口（直接解密）'
+            '/api/lyrics?mid=<songmid>': '通过songmid获取所有歌词'
         },
-        'note': 'id和mid参数二选一，id优先',
-        'example_id': '/api/lyrics?id=213836590',
-        'example_mid': '/api/lyrics?mid=0009vzel3OWyod'
+        'note': 'id和mid参数二选一，id优先'
     })
 
 @app.route('/api/lyrics', methods=['GET'])
@@ -1081,7 +1063,7 @@ def get_lyrics():
             'success': False,
             'error': '缺少参数，请提供id或mid',
             'example_id': '/api/lyrics?id=213836590',
-            'example_mid': '/api/lyrics?mid=0009vzel3OWyod'
+            'example_mid': '/api/lyrics?mid=001CJxVG1yppB0'
         }, 400)
     
     try:
@@ -1159,17 +1141,7 @@ def get_lyrics():
         lrc_trans = clean_lyric_text(lrc_result.get('trans', ''))
         qrc_lyric = clean_lyric_text(qrc_result.get('lyrics', ''))
         qrc_trans = clean_lyric_text(qrc_result.get('trans', ''))
-        
-        # 罗马音字段特殊处理：如果是XML格式，提取LyricInfo内容
-        qrc_roma = qrc_result.get('roma', '')
-        if qrc_roma:
-            # 尝试提取罗马音文本内容
-            extracted_roma = extract_roma_text_from_xml(qrc_roma)
-            if extracted_roma and extracted_roma != qrc_roma:
-                # 如果成功提取到文本，使用提取的文本
-                qrc_roma = extracted_roma
-            # 清理文本
-            qrc_roma = clean_lyric_text(qrc_roma)
+        qrc_roma = clean_lyric_text(qrc_result.get('roma', ''))
         
         # 优先使用LRC的翻译，如果没有则使用QRC的翻译
         trans = lrc_trans if lrc_trans else qrc_trans
@@ -1186,7 +1158,7 @@ def get_lyrics():
                 'lrc': lrc_lyric,       # LRC逐行歌词
                 'qrc': qrc_lyric,      # QRC逐字歌词（对应 get.js 的 yrcLyrics）
                 'trans': trans,        # 翻译歌词（优先LRC翻译）
-                'roma': qrc_roma       # 罗马音（从XML中提取的文本）
+                'roma': qrc_roma       # 罗马音
             },
             'has_lrc': bool(lrc_lyric or lrc_trans),
             'has_qrc': bool(qrc_lyric or qrc_roma)
@@ -1207,51 +1179,6 @@ def get_lyrics():
             'traceback': error_traceback,
             'id': musicid,
             'mid': mid
-        }, 500)
-
-@app.route('/api/test', methods=['GET'])
-def test():
-    """测试接口"""
-    return json_response({
-        'success': True,
-        'message': 'API运行正常',
-        'version': '4.2.0',
-        'timestamp': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
-        'endpoints': [
-            {'path': '/api/lyrics?id=<musicid>', 'method': 'GET', 'description': '通过musicid获取所有歌词'},
-            {'path': '/api/lyrics?mid=<mid>', 'method': 'GET', 'description': '通过mid获取所有歌词'},
-            {'path': '/api/test', 'method': 'GET', 'description': '测试接口'},
-            {'path': '/api/debug?hex=<hex>', 'method': 'GET', 'description': '调试接口（直接解密）'}
-        ]
-    })
-
-@app.route('/api/debug', methods=['GET'])
-def debug():
-    """调试接口：直接测试解密"""
-    hex_str = request.args.get('hex')
-    if not hex_str:
-        return json_response({
-            'success': False,
-            'error': '缺少hex参数',
-            'example': '/api/debug?hex=加密的16进制字符串'
-        }, 400)
-    
-    try:
-        decrypted = decrypt_qq_lyric(hex_str)
-        return json_response({
-            'success': True,
-            'original_length': len(hex_str),
-            'decrypted_length': len(decrypted),
-            'decrypted': decrypted[:500] + '...' if len(decrypted) > 500 else decrypted,
-            'is_xml': '<?xml' in decrypted[:20],
-            'note': '直接解密，不做任何格式化'
-        })
-    except Exception as e:
-        import traceback
-        return json_response({
-            'success': False,
-            'error': str(e),
-            'traceback': traceback.format_exc()
         }, 500)
 
 # 用于Vercel
