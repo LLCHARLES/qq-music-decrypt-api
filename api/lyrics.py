@@ -9,6 +9,7 @@ import xml.etree.ElementTree as ET
 from enum import Enum
 import base64
 import time
+import html  # 添加html模块用于解码HTML实体
 
 app = Flask(__name__)
 app.json.ensure_ascii = False
@@ -30,7 +31,6 @@ def json_response(data, status_code=200):
     response.status_code = status_code
     return response
 
-# ================ DES算法实现 ================
 # ================ DES算法实现 ================
 class DESMode(Enum):
     DES_ENCRYPT = 1
@@ -399,9 +399,18 @@ def preprocess_lyric_lines(lyric_content, lyric_type='lrc'):
                     'plainText': plain_text.strip(),
                     'type': 'lrc'
                 })
+            elif line.strip():
+                # 纯文本行
+                parsed_lines.append({
+                    'raw': line,
+                    'timestamp': '',
+                    'text': line.strip(),
+                    'plainText': line.strip(),
+                    'type': 'text'
+                })
     
     elif lyric_type == 'qrc':
-        # 解析QRC/YRC格式行
+        # 解析QRC/YRC格式行 - 只匹配YRC格式
         for line in filtered_lines:
             # 匹配YRC格式：[开始时间,持续时间]内容
             match = re.match(r'^\[(\d+),(\d+)\](.*)$', line)
@@ -419,30 +428,15 @@ def preprocess_lyric_lines(lyric_content, lyric_type='lrc'):
                     'plainText': plain_text,
                     'type': 'qrc'
                 })
-            else:
-                # 如果不是YRC格式，可能是LRC格式或其他文本
-                # 尝试匹配LRC格式
-                lrc_match = re.match(r'^(\[[0-9:.]+\])(.*)$', line)
-                if lrc_match:
-                    plain_text = lrc_match.group(2).strip()
-                    plain_text = re.sub(r'\[.*?\]', '', plain_text)
-                    
-                    parsed_lines.append({
-                        'raw': line,
-                        'timestamp': lrc_match.group(1),
-                        'text': lrc_match.group(2).strip(),
-                        'plainText': plain_text.strip(),
-                        'type': 'lrc'
-                    })
-                elif line.strip():
-                    # 纯文本行
-                    parsed_lines.append({
-                        'raw': line,
-                        'timestamp': '',
-                        'text': line.strip(),
-                        'plainText': line.strip(),
-                        'type': 'text'
-                    })
+            elif line.strip():
+                # QRC中不应该有LRC格式行，但如果有其他内容，作为纯文本处理
+                parsed_lines.append({
+                    'raw': line,
+                    'timestamp': '',
+                    'text': line.strip(),
+                    'plainText': line.strip(),
+                    'type': 'text'
+                })
     
     return parsed_lines
 
@@ -610,6 +604,7 @@ def unified_filter_lyrics(lyric_content, lyric_type='lrc'):
 QQ_KEY = b'!@#)(*$%123ZXC!@!@#)(NHL'
 
 def decrypt_qq_lyric(encrypted_hex):
+    """解密QQ音乐歌词，并解码HTML实体"""
     try:
         encrypted_bytes = bytes.fromhex(encrypted_hex)
         schedule = [[[0] * 6 for _ in range(16)] for _ in range(3)]
@@ -627,27 +622,35 @@ def decrypt_qq_lyric(encrypted_hex):
                         decompressed = decrypted_data[3:]
                     else:
                         decompressed = decrypted_data
-                    return decompressed.decode('utf-8')
+                    # 解码HTML实体
+                    decoded_text = decompressed.decode('utf-8')
+                    return html.unescape(decoded_text)
                 except UnicodeDecodeError as e3:
                     raise Exception(f"解密和解压失败: 标准zlib错误: {e1}, 原始deflate错误: {e2}, UTF-8解码错误: {e3}")
         
-        return decompressed.decode('utf-8')
+        # 解码HTML实体
+        decoded_text = decompressed.decode('utf-8')
+        return html.unescape(decoded_text)
         
     except Exception as e:
         if "incorrect header check" in str(e):
             try:
-                return decrypted_data.decode('utf-8', errors='ignore')
+                # 解码HTML实体
+                decoded_text = decrypted_data.decode('utf-8', errors='ignore')
+                return html.unescape(decoded_text)
             except:
                 pass
         raise Exception(f"解密失败: {str(e)}")
 
 def extract_lyric_content_from_xml(xml_string):
+    """从XML中提取歌词内容，并解码HTML实体"""
     pattern1 = r'LyricContent=(["\'])(.*?)\1'
     match = re.search(pattern1, xml_string, re.DOTALL)
     
     if match:
         lyric_content = match.group(2)
-        lyric_content = lyric_content.replace('&quot;', '"').replace('&apos;', "'").replace('&lt;', '<').replace('&gt;', '>').replace('&amp;', '&')
+        # 解码HTML实体
+        lyric_content = html.unescape(lyric_content)
         return lyric_content
     
     try:
@@ -656,6 +659,8 @@ def extract_lyric_content_from_xml(xml_string):
         if lyric_node is not None:
             lyric_content = lyric_node.get('LyricContent')
             if lyric_content is not None:
+                # 解码HTML实体
+                lyric_content = html.unescape(lyric_content)
                 return lyric_content
     except Exception as e:
         print(f"XML解析失败: {e}")
@@ -936,6 +941,8 @@ def get_lrc_by_mid(mid):
             if lyric_data.get('lyric'):
                 try:
                     decoded_lyric = base64.b64decode(lyric_data['lyric']).decode('utf-8')
+                    # 解码HTML实体
+                    decoded_lyric = html.unescape(decoded_lyric)
                     # 使用统一过滤函数
                     result['lyric'] = unified_filter_lyrics(decoded_lyric, 'lrc')
                     print(f"LRC歌词过滤后长度: {len(result['lyric'])}")
@@ -946,6 +953,8 @@ def get_lrc_by_mid(mid):
             if lyric_data.get('trans'):
                 try:
                     decoded_trans = base64.b64decode(lyric_data['trans']).decode('utf-8')
+                    # 解码HTML实体
+                    decoded_trans = html.unescape(decoded_trans)
                     # 使用统一过滤函数
                     result['trans'] = unified_filter_lyrics(decoded_trans, 'lrc')
                     print(f"LRC翻译过滤后长度: {len(result['trans'])}")
