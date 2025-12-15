@@ -1,5 +1,4 @@
-# api/lyrics.py - 支持LRC逐行歌词、QRC逐字歌词和罗马音的完整版本
-
+# api/lyrics.py - 完整支持LRC和QRC歌词的最终版本
 from flask import Flask, request, jsonify, make_response
 import urllib.request
 import urllib.parse
@@ -8,13 +7,10 @@ import zlib
 import re
 import xml.etree.ElementTree as ET
 from enum import Enum
-import io
 import base64
 import time
 
 app = Flask(__name__)
-
-# 全局设置JSON确保不使用ASCII编码
 app.json.ensure_ascii = False
 
 # ================ CORS 支持 ================
@@ -25,7 +21,6 @@ def after_request(response):
     response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
     return response
 
-# ================ 辅助函数：返回JSON响应 ================
 def json_response(data, status_code=200):
     """返回JSON响应，确保中文字符不被转义"""
     response = make_response(
@@ -41,27 +36,22 @@ class DESMode(Enum):
     DES_DECRYPT = 0
 
 def bit_num(a, b, c):
-    """对应 C# 中的 BITNUM 函数"""
     byte_index = (b // 32) * 4 + 3 - (b % 32) // 8
     bit_position = 7 - (b % 8)
     extracted_bit = (a[byte_index] >> bit_position) & 0x01
     return extracted_bit << c
 
 def bit_num_int_r(a, b, c):
-    """对应 C# 中的 BITNUMINTR 函数"""
     extracted_bit = (a >> (31 - b)) & 0x00000001
     return extracted_bit << c
 
 def bit_num_int_l(a, b, c):
-    """对应 C# 中的 BITNUMINTL 函数"""
     extracted_bit = (a << b) & 0x80000000
     return extracted_bit >> c
 
 def s_box_bit(a):
-    """对应 C# 中的 SBOXBIT 函数"""
     return (a & 0x20) | ((a & 0x1f) >> 1) | ((a & 0x01) << 4)
 
-# S-box 表
 s_box1 = [14, 4, 13, 1, 2, 15, 11, 8, 3, 10, 6, 12, 5, 9, 0, 7,
           0, 15, 7, 4, 14, 2, 13, 1, 10, 6, 12, 11, 9, 5, 3, 8,
           4, 1, 14, 8, 13, 6, 2, 11, 15, 12, 9, 7, 3, 10, 5, 0,
@@ -103,7 +93,6 @@ s_box8 = [13, 2, 8, 4, 6, 15, 11, 1, 10, 9, 3, 14, 5, 0, 12, 7,
           2, 1, 14, 7, 4, 10, 8, 13, 15, 12, 9, 0, 3, 5, 6, 11]
 
 def ip(state, input_bytes):
-    """Initial Permutation"""
     state[0] = (bit_num(input_bytes, 57, 31) | bit_num(input_bytes, 49, 30) | 
                 bit_num(input_bytes, 41, 29) | bit_num(input_bytes, 33, 28) |
                 bit_num(input_bytes, 25, 27) | bit_num(input_bytes, 17, 26) |
@@ -140,7 +129,6 @@ def ip(state, input_bytes):
     return state
 
 def inv_ip(state, output_bytes):
-    """Inverse Initial Permutation"""
     output_bytes[3] = (bit_num_int_r(state[1], 7, 7) | bit_num_int_r(state[0], 7, 6) |
                        bit_num_int_r(state[1], 15, 5) | bit_num_int_r(state[0], 15, 4) |
                        bit_num_int_r(state[1], 23, 3) | bit_num_int_r(state[0], 23, 2) |
@@ -183,10 +171,8 @@ def inv_ip(state, output_bytes):
     return output_bytes
 
 def f_func(state, key):
-    """DES F function"""
     lrgstate = bytearray(6)
     
-    # Expansion
     t1 = (bit_num_int_l(state, 31, 0) | ((state & 0xf0000000) >> 1) | bit_num_int_l(state, 4, 5) |
           bit_num_int_l(state, 3, 6) | ((state & 0x0f000000) >> 3) | bit_num_int_l(state, 8, 11) |
           bit_num_int_l(state, 7, 12) | ((state & 0x00f00000) >> 5) | bit_num_int_l(state, 12, 17) |
@@ -204,7 +190,6 @@ def f_func(state, key):
     lrgstate[4] = (t2 >> 16) & 0x000000ff
     lrgstate[5] = (t2 >> 8) & 0x000000ff
 
-    # XOR with key
     lrgstate[0] ^= key[0]
     lrgstate[1] ^= key[1]
     lrgstate[2] ^= key[2]
@@ -212,7 +197,6 @@ def f_func(state, key):
     lrgstate[4] ^= key[4]
     lrgstate[5] ^= key[5]
 
-    # S-box substitution
     state = ((s_box1[s_box_bit(lrgstate[0] >> 2)] << 28) |
              (s_box2[s_box_bit(((lrgstate[0] & 0x03) << 4) | (lrgstate[1] >> 4))] << 24) |
              (s_box3[s_box_bit(((lrgstate[1] & 0x0f) << 2) | (lrgstate[2] >> 6))] << 20) |
@@ -222,7 +206,6 @@ def f_func(state, key):
              (s_box7[s_box_bit(((lrgstate[4] & 0x0f) << 2) | (lrgstate[5] >> 6))] << 4) |
              s_box8[s_box_bit(lrgstate[5] & 0x3f)])
 
-    # P-box permutation
     state = (bit_num_int_l(state, 15, 0) | bit_num_int_l(state, 6, 1) | bit_num_int_l(state, 19, 2) |
              bit_num_int_l(state, 20, 3) | bit_num_int_l(state, 28, 4) | bit_num_int_l(state, 11, 5) |
              bit_num_int_l(state, 27, 6) | bit_num_int_l(state, 16, 7) | bit_num_int_l(state, 0, 8) |
@@ -238,7 +221,6 @@ def f_func(state, key):
     return state
 
 def des_key_schedule(key, schedule, mode):
-    """DES key schedule"""
     key_rnd_shift = [1, 1, 2, 2, 2, 2, 2, 2, 1, 2, 2, 2, 2, 2, 2, 1]
     key_perm_c = [56, 48, 40, 32, 24, 16, 8, 0, 57, 49, 41, 33, 25, 17,
                   9, 1, 58, 50, 42, 34, 26, 18, 10, 2, 59, 51, 43, 35]
@@ -249,14 +231,12 @@ def des_key_schedule(key, schedule, mode):
                        40, 51, 30, 36, 46, 54, 29, 39, 50, 44, 32, 47,
                        43, 48, 38, 55, 33, 52, 45, 41, 49, 35, 28, 31]
 
-    # Initial key permutation
     c = 0
     d = 0
     for i in range(28):
         c |= bit_num(key, key_perm_c[i], 31 - i)
         d |= bit_num(key, key_perm_d[i], 31 - i)
 
-    # Generate 16 subkeys
     for i in range(16):
         c = ((c << key_rnd_shift[i]) | (c >> (28 - key_rnd_shift[i]))) & 0xfffffff0
         d = ((d << key_rnd_shift[i]) | (d >> (28 - key_rnd_shift[i]))) & 0xfffffff0
@@ -266,10 +246,8 @@ def des_key_schedule(key, schedule, mode):
         else:
             to_gen = i
 
-        # Initialize subkey
         schedule[to_gen] = [0] * 6
         
-        # Fill subkey
         for j in range(24):
             schedule[to_gen][j // 8] |= bit_num_int_r(c, key_compression[j], 7 - (j % 8))
         
@@ -277,120 +255,234 @@ def des_key_schedule(key, schedule, mode):
             schedule[to_gen][j // 8] |= bit_num_int_r(d, key_compression[j] - 27, 7 - (j % 8))
 
 def des_crypt(input_bytes, key_schedule):
-    """DES encryption/decryption"""
     state = [0, 0]
     
-    # Initial permutation
     ip(state, input_bytes)
     
-    # 16 rounds
     for idx in range(15):
         t = state[1]
         state[1] = f_func(state[1], key_schedule[idx]) ^ state[0]
         state[0] = t
     
-    # Final round (no swap)
     state[0] = f_func(state[1], key_schedule[15]) ^ state[0]
     
-    # Inverse initial permutation
     output_bytes = bytearray(8)
     inv_ip(state, output_bytes)
     
     return output_bytes
 
 def triple_des_key_setup(key, schedule, mode):
-    """Triple DES key setup"""
     if mode == DESMode.DES_ENCRYPT:
         des_key_schedule(key[0:8], schedule[0], DESMode.DES_ENCRYPT)
         des_key_schedule(key[8:16], schedule[1], DESMode.DES_DECRYPT)
         des_key_schedule(key[16:24], schedule[2], DESMode.DES_ENCRYPT)
-    else:  # DECRYPT
+    else:
         des_key_schedule(key[0:8], schedule[2], DESMode.DES_DECRYPT)
         des_key_schedule(key[8:16], schedule[1], DESMode.DES_ENCRYPT)
         des_key_schedule(key[16:24], schedule[0], DESMode.DES_DECRYPT)
 
 def triple_des_crypt(input_bytes, schedule):
-    """Triple DES encryption/decryption"""
-    # Create mutable bytearray
     if isinstance(input_bytes, bytes):
         data = bytearray(input_bytes)
     else:
         data = bytearray(input_bytes)
     
-    # Ensure length is multiple of 8
     if len(data) % 8 != 0:
         padding = 8 - (len(data) % 8)
         data.extend([0] * padding)
     
     output = bytearray(len(data))
     
-    # Process in 8-byte blocks
     for i in range(0, len(data), 8):
         block = data[i:i+8]
-        
-        # First DES
         temp = des_crypt(block, schedule[0])
-        
-        # Second DES
         temp = des_crypt(temp, schedule[1])
-        
-        # Third DES
         temp = des_crypt(temp, schedule[2])
-        
-        # Copy to output
         output[i:i+8] = temp
     
     return output
 
+# ================ 歌词过滤函数（从第一个版本） ================
+def contains_colon(text):
+    return ':' in text or '：' in text
+
+def contains_bracket_tag(text):
+    has_half_pair = '[' in text and ']' in text
+    has_full_pair = '【' in text and '】' in text
+    return has_half_pair or has_full_pair
+
+def contains_paren_pair(text):
+    has_half_pair = '(' in text and ')' in text
+    has_full_pair = '（' in text and '）' in text
+    return has_half_pair or has_full_pair
+
+def is_license_warning_line(text):
+    if not text:
+        return False
+    
+    special_keywords = ['文曲大模型', '享有本翻译作品的著作权']
+    for keyword in special_keywords:
+        if keyword in text:
+            return True
+    
+    tokens = ['未经', '许可', '授权', '不得', '请勿', '使用', '版权', '翻唱']
+    count = 0
+    for token in tokens:
+        if token in text:
+            count += 1
+    return count >= 3
+
+def filter_lyrics_with_new_rules(lyric_content):
+    """过滤LRC歌词"""
+    if not lyric_content:
+        return ''
+    
+    lines = lyric_content.replace('\r\n', '\n').split('\n')
+    
+    filtered_lines = []
+    for line in lines:
+        trimmed = line.strip()
+        if not re.match(r'^\[(ti|ar|al|by|offset|t_time|kana|lang|total):.*\]$', trimmed, re.IGNORECASE):
+            filtered_lines.append(line)
+    
+    parsed_lines = []
+    for line in filtered_lines:
+        match = re.match(r'^(\[[0-9:.]+\])(.*)$', line)
+        if match:
+            parsed_lines.append({
+                'raw': line,
+                'timestamp': match.group(1),
+                'text': match.group(2).strip(),
+                'plainText': re.sub(r'\[.*?\]', '', match.group(2).strip())
+            })
+    
+    filtered = list(parsed_lines)
+    removed_colon_plain_texts = []
+    
+    i = 0
+    scan_limit = min(3, len(filtered))
+    while i < scan_limit:
+        text = filtered[i]['plainText']
+        if '-' in text:
+            filtered.pop(i)
+            scan_limit = min(3, len(filtered))
+            continue
+        else:
+            i += 1
+    
+    removed_a2_colon = False
+    i = 0
+    scan_limit = min(3, len(filtered))
+    while i < scan_limit:
+        text = filtered[i]['plainText']
+        if contains_colon(text):
+            removed_colon_plain_texts.append(text)
+            filtered.pop(i)
+            removed_a2_colon = True
+            scan_limit = min(3, len(filtered))
+            continue
+        else:
+            i += 1
+    
+    leading = 0
+    while leading < len(filtered):
+        text = filtered[leading]['plainText']
+        if contains_colon(text):
+            leading += 1
+        else:
+            break
+    
+    if removed_a2_colon:
+        if leading >= 1:
+            for idx in range(leading):
+                removed_colon_plain_texts.append(filtered[idx]['plainText'])
+            filtered = filtered[leading:]
+    else:
+        if leading >= 2:
+            for idx in range(leading):
+                removed_colon_plain_texts.append(filtered[idx]['plainText'])
+            filtered = filtered[leading:]
+    
+    new_filtered = []
+    i = 0
+    while i < len(filtered):
+        text = filtered[i]['plainText']
+        if contains_colon(text):
+            j = i
+            while j < len(filtered):
+                tj = filtered[j]['plainText']
+                if contains_colon(tj):
+                    j += 1
+                else:
+                    break
+            run_len = j - i
+            if run_len >= 2:
+                for k in range(i, j):
+                    removed_colon_plain_texts.append(filtered[k]['plainText'])
+                i = j
+            else:
+                new_filtered.append(filtered[i])
+                i = j
+        else:
+            new_filtered.append(filtered[i])
+            i += 1
+    filtered = new_filtered
+    
+    filtered = [line for line in filtered if not contains_bracket_tag(line['plainText'])]
+    
+    i = 0
+    scan_limit = min(2, len(filtered))
+    while i < scan_limit:
+        text = filtered[i]['plainText']
+        if contains_paren_pair(text):
+            filtered.pop(i)
+            scan_limit = min(2, len(filtered))
+            continue
+        else:
+            i += 1
+    
+    filtered = [line for line in filtered if not is_license_warning_line(line['plainText'])]
+    
+    filtered = [line for line in filtered if not (
+        line['plainText'] == '' or
+        line['plainText'] == '//' or
+        re.match(r'^\/\/\s*$', line['plainText']) or
+        re.match(r'^\[\d+:\d+(\.\d+)?\]\s*\/\/\s*$', line['raw']) or
+        re.match(r'^\[\d+:\d+(\.\d+)?\]\s*$', line['raw'])
+    )]
+    
+    result = '\n'.join([line['raw'] for line in filtered])
+    return result
+
 # ================ QQ 音乐解密核心 ================
-# QQ Music 密钥
 QQ_KEY = b'!@#)(*$%123ZXC!@!@#)(NHL'
 
 def decrypt_qq_lyric(encrypted_hex):
-    """解密QQ音乐歌词 - 对应C#的Decrypter.DecryptLyrics"""
     try:
-        # 1. Hex字符串转字节
         encrypted_bytes = bytes.fromhex(encrypted_hex)
-        
-        # 2. 准备3DES密钥调度
         schedule = [[[0] * 6 for _ in range(16)] for _ in range(3)]
-        
-        # 3. 设置密钥
         triple_des_key_setup(QQ_KEY, schedule, DESMode.DES_DECRYPT)
-        
-        # 4. 解密
         decrypted_data = triple_des_crypt(encrypted_bytes, schedule)
         
-        # 5. 尝试解压 - 这里参考C#代码，使用zlib解压
         try:
-            # 首先尝试标准zlib解压
             decompressed = zlib.decompress(decrypted_data)
         except zlib.error as e1:
-            # 如果标准解压失败，尝试使用原始deflate数据解压（-15表示原始deflate数据，没有头部）
             try:
                 decompressed = zlib.decompress(decrypted_data, -15)
             except zlib.error as e2:
-                # 如果两种解压方式都失败，检查是否已经是明文文本
-                # 尝试直接解码为UTF-8（有些歌词可能没有压缩）
                 try:
-                    # 跳过可能的BOM字符
                     if decrypted_data.startswith(b'\xef\xbb\xbf'):
                         decompressed = decrypted_data[3:]
                     else:
                         decompressed = decrypted_data
-                    # 尝试解码
                     return decompressed.decode('utf-8')
                 except UnicodeDecodeError as e3:
-                    # 所有方法都失败，抛出异常
                     raise Exception(f"解密和解压失败: 标准zlib错误: {e1}, 原始deflate错误: {e2}, UTF-8解码错误: {e3}")
         
-        # 6. 返回UTF-8字符串
         return decompressed.decode('utf-8')
         
     except Exception as e:
-        # 如果是特定错误，尝试更详细的调试
         if "incorrect header check" in str(e):
-            # 对于头部检查错误，尝试直接返回解密后的数据（可能已经是文本）
             try:
                 return decrypted_data.decode('utf-8', errors='ignore')
             except:
@@ -398,20 +490,14 @@ def decrypt_qq_lyric(encrypted_hex):
         raise Exception(f"解密失败: {str(e)}")
 
 def extract_lyric_content_from_xml(xml_string):
-    """从XML字符串中提取LyricContent内容，使用正则表达式保留换行符"""
-    # 方法1：使用正则表达式提取LyricContent属性值
-    # 匹配 LyricContent="..." 或 LyricContent='...'
     pattern1 = r'LyricContent=(["\'])(.*?)\1'
     match = re.search(pattern1, xml_string, re.DOTALL)
     
     if match:
-        # 找到匹配，返回属性值
         lyric_content = match.group(2)
-        # 替换可能存在的XML实体
         lyric_content = lyric_content.replace('&quot;', '"').replace('&apos;', "'").replace('&lt;', '<').replace('&gt;', '>').replace('&amp;', '&')
         return lyric_content
     
-    # 方法2：如果正则表达式失败，尝试使用XML解析
     try:
         root = ET.fromstring(xml_string)
         lyric_node = root.find('.//Lyric_1')
@@ -422,11 +508,9 @@ def extract_lyric_content_from_xml(xml_string):
     except Exception as e:
         print(f"XML解析失败: {e}")
     
-    # 方法3：如果都没找到，返回原始字符串
     return xml_string
 
 def remove_illegal_xml_content(content):
-    """移除XML中的非法内容 - 对应C#的XmlUtils.RemoveIllegalContent"""
     i = 0
     while i < len(content):
         if content[i] == '<':
@@ -443,28 +527,17 @@ def remove_illegal_xml_content(content):
     return content.strip()
 
 def parse_xml_content(xml_content):
-    """解析XML内容并提取歌词（支持原文、翻译、罗马音）"""
-    # 移除注释
     xml_content = xml_content.replace('<!--', '').replace('-->', '')
-    
-    # 移除非法内容
     xml_content = remove_illegal_xml_content(xml_content)
-    
-    # 记录原始内容用于调试
     original_xml = xml_content[:500] if len(xml_content) > 500 else xml_content
     
     try:
-        # 修复&符号
         xml_content = re.sub(r'&(?![a-zA-Z]{2,6};|#[0-9]{2,4};)', '&amp;', xml_content)
-        
-        # 解析XML
         root = ET.fromstring(xml_content)
         
         result = {'lyrics': '', 'trans': '', 'roma': ''}
         
-        # 查找所有content/contentts/contentroma标签
         def find_all_nodes(node, tag_name):
-            """递归查找所有指定标签的节点"""
             nodes = []
             if node.tag == tag_name:
                 nodes.append(node)
@@ -472,53 +545,39 @@ def parse_xml_content(xml_content):
                 nodes.extend(find_all_nodes(child, tag_name))
             return nodes
         
-        # 查找原文歌词
         content_nodes = find_all_nodes(root, 'content')
         for content_node in content_nodes:
             if content_node.text:
                 try:
                     decrypted_text = decrypt_qq_lyric(content_node.text.strip())
-                    
-                    # 检查是否是XML格式
                     if decrypted_text and decrypted_text.strip().startswith('<?xml'):
                         result['lyrics'] = extract_lyric_content_from_xml(decrypted_text)
                     else:
                         result['lyrics'] = decrypted_text
-                    
-                    # 如果成功获取到歌词，跳出循环
                     if result['lyrics']:
                         break
-                        
                 except Exception as e:
                     print(f"解密原文歌词失败: {e}")
         
-        # 查找翻译歌词
         contentts_nodes = find_all_nodes(root, 'contentts')
         for contentts_node in contentts_nodes:
             if contentts_node.text:
                 try:
                     decrypted_text = decrypt_qq_lyric(contentts_node.text.strip())
                     result['trans'] = decrypted_text
-                    
-                    # 如果成功获取到翻译，跳出循环
                     if result['trans']:
                         break
-                        
                 except Exception as e:
                     print(f"解密翻译歌词失败: {e}")
         
-        # 查找罗马音
         contentroma_nodes = find_all_nodes(root, 'contentroma')
         for contentroma_node in contentroma_nodes:
             if contentroma_node.text:
                 try:
                     decrypted_text = decrypt_qq_lyric(contentroma_node.text.strip())
                     result['roma'] = decrypted_text
-                    
-                    # 如果成功获取到罗马音，跳出循环
                     if result['roma']:
                         break
-                        
                 except Exception as e:
                     print(f"解密罗马音失败: {e}")
         
@@ -527,62 +586,45 @@ def parse_xml_content(xml_content):
     except Exception as e:
         print(f"XML解析失败: {e}")
         print(f"原始XML内容（前500字符）: {original_xml}")
-        
-        # XML解析失败，尝试使用正则表达式提取
         return extract_content_with_regex(xml_content)
 
 def extract_content_with_regex(xml_content):
-    """使用正则表达式从XML中提取内容（降级处理）"""
     result = {'lyrics': '', 'trans': '', 'roma': ''}
     
-    # 匹配<content>标签
     content_matches = re.findall(r'<content>(.*?)</content>', xml_content, re.DOTALL)
     for encrypted in content_matches:
         encrypted = encrypted.strip()
         if encrypted:
             try:
                 decrypted_text = decrypt_qq_lyric(encrypted)
-                
-                # 检查是否是XML格式
                 if decrypted_text and decrypted_text.strip().startswith('<?xml'):
                     result['lyrics'] = extract_lyric_content_from_xml(decrypted_text)
                 else:
                     result['lyrics'] = decrypted_text
-                
-                # 如果成功获取到歌词，跳出循环
                 if result['lyrics']:
                     break
-                    
             except Exception as e:
                 print(f"解密原文歌词失败（正则）: {e}")
     
-    # 匹配<contentts>标签
     contentts_matches = re.findall(r'<contentts>(.*?)</contentts>', xml_content, re.DOTALL)
     for encrypted in contentts_matches:
         encrypted = encrypted.strip()
         if encrypted:
             try:
                 result['trans'] = decrypt_qq_lyric(encrypted)
-                
-                # 如果成功获取到翻译，跳出循环
                 if result['trans']:
                     break
-                    
             except Exception as e:
                 print(f"解密翻译歌词失败（正则）: {e}")
     
-    # 匹配<contentroma>标签
     contentroma_matches = re.findall(r'<contentroma>(.*?)</contentroma>', xml_content, re.DOTALL)
     for encrypted in contentroma_matches:
         encrypted = encrypted.strip()
         if encrypted:
             try:
                 result['roma'] = decrypt_qq_lyric(encrypted)
-                
-                # 如果成功获取到罗马音，跳出循环
                 if result['roma']:
                     break
-                    
             except Exception as e:
                 print(f"解密罗马音失败（正则）: {e}")
     
@@ -590,8 +632,7 @@ def extract_content_with_regex(xml_content):
 
 # ================ 歌曲信息获取 ================
 def get_song_by_mid(mid):
-    """通过mid获取歌曲信息"""
-    callback = 'getOneSongInfoCallback'  # 根据C#代码，这是正确的回调函数名
+    callback = 'getOneSongInfoCallback'
     params = {
         'songmid': mid,
         'tpl': 'yqq_song_detail',
@@ -620,45 +661,35 @@ def get_song_by_mid(mid):
     try:
         with urllib.request.urlopen(req, timeout=10) as response:
             data = response.read().decode('utf-8')
+            print(f"歌曲API原始响应（前500字符）: {data[:500]}")
             
-            # 打印原始数据前200字符用于调试
-            print(f"原始响应数据（前500字符）: {data[:500]}")
-            
-            # 移除JSONP包装 - 更健壮的方式
-            # 先尝试去掉回调函数名
             if data.startswith(callback + '(') and data.endswith(')'):
-                data = data[len(callback) + 1:-1]  # 去掉回调函数名和括号
+                data = data[len(callback) + 1:-1]
             elif data.startswith(callback + '('):
-                # 如果格式不是预期的，尝试更通用的方式
                 start_index = data.find('(')
                 end_index = data.rfind(')')
                 if start_index != -1 and end_index != -1 and end_index > start_index:
                     data = data[start_index + 1:end_index]
             
-            # 再次检查是否还有回调函数包装
             data = data.strip()
             if data.startswith('(') and data.endswith(')'):
                 data = data[1:-1]
             
             print(f"处理后的JSON数据（前200字符）: {data[:200]}")
-            
             return json.loads(data)
     except Exception as e:
         print(f"获取歌曲信息失败: {e}")
-        # 打印完整的错误信息
         import traceback
         traceback.print_exc()
         return None
 
 def get_song_by_id(id):
-    """通过id获取歌曲信息"""
-    # 判断id是否为数字
     if id.isdigit():
         param_key = 'songid'
     else:
         param_key = 'songmid'
     
-    callback = 'getOneSongInfoCallback'  # 根据C#代码，这是正确的回调函数名
+    callback = 'getOneSongInfoCallback'
     params = {
         param_key: id,
         'tpl': 'yqq_song_detail',
@@ -687,41 +718,31 @@ def get_song_by_id(id):
     try:
         with urllib.request.urlopen(req, timeout=10) as response:
             data = response.read().decode('utf-8')
+            print(f"歌曲API原始响应（前500字符）: {data[:500]}")
             
-            # 打印原始数据前200字符用于调试
-            print(f"原始响应数据（前500字符）: {data[:500]}")
-            
-            # 移除JSONP包装 - 更健壮的方式
-            # 先尝试去掉回调函数名
             if data.startswith(callback + '(') and data.endswith(')'):
-                data = data[len(callback) + 1:-1]  # 去掉回调函数名和括号
+                data = data[len(callback) + 1:-1]
             elif data.startswith(callback + '('):
-                # 如果格式不是预期的，尝试更通用的方式
                 start_index = data.find('(')
                 end_index = data.rfind(')')
                 if start_index != -1 and end_index != -1 and end_index > start_index:
                     data = data[start_index + 1:end_index]
             
-            # 再次检查是否还有回调函数包装
             data = data.strip()
             if data.startswith('(') and data.endswith(')'):
                 data = data[1:-1]
             
             print(f"处理后的JSON数据（前200字符）: {data[:200]}")
-            
             return json.loads(data)
     except Exception as e:
         print(f"获取歌曲信息失败: {e}")
-        # 打印完整的错误信息
         import traceback
         traceback.print_exc()
         return None
 
 def get_lrc_by_mid(mid):
-    """通过mid获取LRC逐行歌词"""
-    # 获取当前时间戳
+    """获取LRC歌词（包含过滤）"""
     current_millis = int(time.time() * 1000)
-    
     callback = 'MusicJsonCallback_lrc'
     params = {
         'callback': callback,
@@ -752,35 +773,44 @@ def get_lrc_by_mid(mid):
     try:
         with urllib.request.urlopen(req, timeout=10) as response:
             data = response.read().decode('utf-8')
+            print(f"LRC API原始响应（前500字符）: {data[:500]}")
             
-            # 移除JSONP包装
-            if data.startswith(callback + '('):
-                data = data[len(callback) + 1:-2]
+            if data.startswith(callback):
+                data = data.replace(callback + '(', '').rsplit(')', 1)[0]
             
-            result = json.loads(data)
+            lyric_data = json.loads(data)
+            result = {'lyric': '', 'trans': ''}
             
-            # 解码base64编码的歌词
-            lrc_result = {'lyric': '', 'trans': ''}
-            
-            if result.get('lyric'):
+            if lyric_data.get('lyric'):
                 try:
-                    lrc_result['lyric'] = base64.b64decode(result['lyric']).decode('utf-8')
-                except:
-                    lrc_result['lyric'] = result['lyric']
+                    decoded_lyric = base64.b64decode(lyric_data['lyric']).decode('utf-8')
+                    # 关键：应用过滤函数
+                    result['lyric'] = filter_lyrics_with_new_rules(decoded_lyric)
+                    print(f"LRC歌词过滤后长度: {len(result['lyric'])}")
+                except Exception as e:
+                    print(f"解码LRC歌词失败: {e}")
+                    result['lyric'] = lyric_data['lyric']
             
-            if result.get('trans'):
+            if lyric_data.get('trans'):
                 try:
-                    lrc_result['trans'] = base64.b64decode(result['trans']).decode('utf-8')
-                except:
-                    lrc_result['trans'] = result['trans']
+                    decoded_trans = base64.b64decode(lyric_data['trans']).decode('utf-8')
+                    # 关键：应用过滤函数
+                    result['trans'] = filter_lyrics_with_new_rules(decoded_trans)
+                    print(f"LRC翻译过滤后长度: {len(result['trans'])}")
+                except Exception as e:
+                    print(f"解码LRC翻译失败: {e}")
+                    result['trans'] = lyric_data['trans']
             
-            return lrc_result
+            return result
+            
     except Exception as e:
         print(f"获取LRC歌词失败: {e}")
+        import traceback
+        traceback.print_exc()
         return {'lyric': '', 'trans': ''}
 
 def get_qrc_by_id(musicid):
-    """通过musicid获取QRC逐字歌词"""
+    """获取QRC逐字歌词（从第二个版本）"""
     params = {
         'version': '15',
         'miniversion': '82',
@@ -804,19 +834,26 @@ def get_qrc_by_id(musicid):
         with urllib.request.urlopen(req, timeout=10) as response:
             xml_content = response.read().decode('utf-8')
             
+            print(f"获取到原始XML，长度: {len(xml_content)}")
+            print(f"前200个字符: {xml_content[:200] if len(xml_content) > 200 else xml_content}")
+            
             # 解析XML并解密歌词
-            return parse_xml_content(xml_content)
+            result = parse_xml_content(xml_content)
+            
+            return result
     except Exception as e:
         print(f"获取歌词失败: {e}")
+        import traceback
+        traceback.print_exc()
         return {'lyrics': '', 'trans': '', 'roma': ''}
 
 # ================ Flask 路由 ================
 @app.route('/')
 def index():
     return json_response({
-        'name': 'QQ音乐歌词解密API',
-        'version': '3.0.0',
-        'description': '支持LRC逐行歌词、QRC逐字歌词和罗马音的完整版本',
+        'name': 'QQ音乐歌词解密API - 完整版',
+        'version': '4.0.0',
+        'description': '完整支持LRC逐行歌词、QRC逐字歌词、翻译和罗马音',
         'endpoints': {
             '/api/lyrics?id=<musicid>': '通过musicid获取所有歌词',
             '/api/lyrics?mid=<songmid>': '通过songmid获取所有歌词',
@@ -847,29 +884,22 @@ def get_lyrics():
         final_mid = None
         final_musicid = None
         
-        # 优先使用id
         if musicid:
-            # 通过id获取歌曲信息
             song_info = get_song_by_id(musicid)
             if song_info and 'data' in song_info and song_info['data']:
                 song_data = song_info['data'][0]
                 final_musicid = musicid
-                # 尝试从歌曲信息中获取mid
                 final_mid = song_data.get('mid') or song_data.get('songmid')
-                if not final_mid:
-                    # 如果没有mid，尝试使用id本身（如果id是mid格式）
-                    if not musicid.isdigit():
-                        final_mid = musicid
+                if not final_mid and not musicid.isdigit():
+                    final_mid = musicid
         elif mid:
-            # 通过mid获取歌曲信息
             song_info = get_song_by_mid(mid)
             if song_info and 'data' in song_info and song_info['data']:
                 song_data = song_info['data'][0]
                 final_mid = mid
-                # 尝试从歌曲信息中获取musicid
                 final_musicid = song_data.get('id') or song_data.get('songid')
                 if not final_musicid:
-                    final_musicid = mid  # 如果没有musicid，使用mid
+                    final_musicid = mid
         
         if not song_info or not song_info.get('data'):
             return json_response({
@@ -885,17 +915,20 @@ def get_lyrics():
         if song_data.get('singer') and len(song_data['singer']) > 0:
             singer_name = song_data['singer'][0].get('name', '')
         
-        # 获取LRC歌词（需要mid）
         lrc_result = {'lyric': '', 'trans': ''}
         if final_mid:
+            print(f"获取LRC歌词，mid: {final_mid}")
             lrc_result = get_lrc_by_mid(final_mid)
+        else:
+            print("没有mid，跳过LRC歌词获取")
         
-        # 获取QRC歌词（需要musicid）
         qrc_result = {'lyrics': '', 'trans': '', 'roma': ''}
         if final_musicid:
+            print(f"获取QRC歌词，musicid: {final_musicid}")
             qrc_result = get_qrc_by_id(final_musicid)
+        else:
+            print("没有musicid，跳过QRC歌词获取")
         
-        # 如果都没有歌词，返回404
         if (not lrc_result.get('lyric') and not lrc_result.get('trans') and
             not qrc_result.get('lyrics') and not qrc_result.get('roma')):
             return json_response({
@@ -906,21 +939,22 @@ def get_lyrics():
                 'note': '可能是歌曲没有歌词，或者歌词格式不支持'
             }, 404)
         
-        # 清理歌词中的多余空格
+        # 清理文本
         def clean_lyric_text(text):
             if not text:
                 return ''
-            # 将多个连续空格替换为单个空格，但保留换行符
             text = re.sub(r'[ \t]+', ' ', text)
             return text
         
-        # 清理歌词文本
         lrc_lyric = clean_lyric_text(lrc_result.get('lyric', ''))
         lrc_trans = clean_lyric_text(lrc_result.get('trans', ''))
         qrc_lyric = clean_lyric_text(qrc_result.get('lyrics', ''))
+        qrc_trans = clean_lyric_text(qrc_result.get('trans', ''))
         qrc_roma = clean_lyric_text(qrc_result.get('roma', ''))
         
-        # 构建响应
+        # 优先使用LRC的翻译，如果没有则使用QRC的翻译
+        trans = lrc_trans if lrc_trans else qrc_trans
+        
         response_data = {
             'success': True,
             'id': final_musicid,
@@ -932,21 +966,20 @@ def get_lyrics():
             'lyric': {
                 'lrc': lrc_lyric,
                 'qrc': qrc_lyric,
-                'trans': lrc_trans,  # 使用LRC的翻译
-                'roma': qrc_roma    # 使用QRC的罗马音
+                'trans': trans,
+                'roma': qrc_roma
             },
-            'has_lrc': bool(lrc_lyric),
-            'has_qrc': bool(qrc_lyric)
+            'has_lrc': bool(lrc_lyric or lrc_trans),
+            'has_qrc': bool(qrc_lyric or qrc_roma)
         }
         
         return json_response(response_data)
         
     except Exception as e:
         import traceback
-        error_traceback = traceback.format_exc() if app.debug else None
+        error_traceback = traceback.format_exc()
         print(f"服务器内部错误: {e}")
-        if error_traceback:
-            print(f"错误堆栈: {error_traceback}")
+        print(f"错误堆栈: {error_traceback}")
         
         return json_response({
             'success': False,
@@ -963,8 +996,8 @@ def test():
     return json_response({
         'success': True,
         'message': 'API运行正常',
-        'version': '3.0.0',
-        'timestamp': '2023-01-01T00:00:00Z',
+        'version': '4.0.0',
+        'timestamp': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
         'endpoints': [
             {'path': '/api/lyrics?id=<musicid>', 'method': 'GET', 'description': '通过musicid获取所有歌词'},
             {'path': '/api/lyrics?mid=<mid>', 'method': 'GET', 'description': '通过mid获取所有歌词'},
@@ -999,10 +1032,9 @@ def debug():
         return json_response({
             'success': False,
             'error': str(e),
-            'traceback': traceback.format_exc() if app.debug else None
+            'traceback': traceback.format_exc()
         }, 500)
 
-# 用于Vercel
 application = app
 
 if __name__ == '__main__':
