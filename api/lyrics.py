@@ -591,7 +591,7 @@ def extract_content_with_regex(xml_content):
 # ================ 歌曲信息获取 ================
 def get_song_by_mid(mid):
     """通过mid获取歌曲信息"""
-    callback = 'getOneSongInfoCallback'
+    callback = 'getOneSongInfoCallback'  # 根据C#代码，这是正确的回调函数名
     params = {
         'songmid': mid,
         'tpl': 'yqq_song_detail',
@@ -621,13 +621,33 @@ def get_song_by_mid(mid):
         with urllib.request.urlopen(req, timeout=10) as response:
             data = response.read().decode('utf-8')
             
-            # 移除JSONP包装
-            if data.startswith(callback + '('):
-                data = data[len(callback) + 1:-2]
+            # 打印原始数据前200字符用于调试
+            print(f"原始响应数据（前500字符）: {data[:500]}")
+            
+            # 移除JSONP包装 - 更健壮的方式
+            # 先尝试去掉回调函数名
+            if data.startswith(callback + '(') and data.endswith(')'):
+                data = data[len(callback) + 1:-1]  # 去掉回调函数名和括号
+            elif data.startswith(callback + '('):
+                # 如果格式不是预期的，尝试更通用的方式
+                start_index = data.find('(')
+                end_index = data.rfind(')')
+                if start_index != -1 and end_index != -1 and end_index > start_index:
+                    data = data[start_index + 1:end_index]
+            
+            # 再次检查是否还有回调函数包装
+            data = data.strip()
+            if data.startswith('(') and data.endswith(')'):
+                data = data[1:-1]
+            
+            print(f"处理后的JSON数据（前200字符）: {data[:200]}")
             
             return json.loads(data)
     except Exception as e:
         print(f"获取歌曲信息失败: {e}")
+        # 打印完整的错误信息
+        import traceback
+        traceback.print_exc()
         return None
 
 def get_song_by_id(id):
@@ -638,7 +658,7 @@ def get_song_by_id(id):
     else:
         param_key = 'songmid'
     
-    callback = 'getOneSongInfoCallback'
+    callback = 'getOneSongInfoCallback'  # 根据C#代码，这是正确的回调函数名
     params = {
         param_key: id,
         'tpl': 'yqq_song_detail',
@@ -668,13 +688,33 @@ def get_song_by_id(id):
         with urllib.request.urlopen(req, timeout=10) as response:
             data = response.read().decode('utf-8')
             
-            # 移除JSONP包装
-            if data.startswith(callback + '('):
-                data = data[len(callback) + 1:-2]
+            # 打印原始数据前200字符用于调试
+            print(f"原始响应数据（前500字符）: {data[:500]}")
+            
+            # 移除JSONP包装 - 更健壮的方式
+            # 先尝试去掉回调函数名
+            if data.startswith(callback + '(') and data.endswith(')'):
+                data = data[len(callback) + 1:-1]  # 去掉回调函数名和括号
+            elif data.startswith(callback + '('):
+                # 如果格式不是预期的，尝试更通用的方式
+                start_index = data.find('(')
+                end_index = data.rfind(')')
+                if start_index != -1 and end_index != -1 and end_index > start_index:
+                    data = data[start_index + 1:end_index]
+            
+            # 再次检查是否还有回调函数包装
+            data = data.strip()
+            if data.startswith('(') and data.endswith(')'):
+                data = data[1:-1]
+            
+            print(f"处理后的JSON数据（前200字符）: {data[:200]}")
             
             return json.loads(data)
     except Exception as e:
         print(f"获取歌曲信息失败: {e}")
+        # 打印完整的错误信息
+        import traceback
+        traceback.print_exc()
         return None
 
 def get_lrc_by_mid(mid):
