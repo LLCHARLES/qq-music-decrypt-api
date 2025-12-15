@@ -1,4 +1,4 @@
-# api/lyrics.py - 完整支持统一歌词过滤的QQ音乐歌词API
+# api/lyrics.py - 完整支持LRC和QRC歌词的最终版本
 from flask import Flask, request, jsonify, make_response
 import urllib.request
 import urllib.parse
@@ -302,41 +302,29 @@ def triple_des_crypt(input_bytes, schedule):
     
     return output
 
-# ================ 统一歌词过滤系统（与 get.js 一致） ================
+# ================ 歌词过滤函数（从第一个版本） ================
 def contains_colon(text):
-    """检查是否包含冒号（中英文冒号）"""
-    if not text:
-        return False
     return ':' in text or '：' in text
 
 def contains_bracket_tag(text):
-    """检查是否包含括号标签"""
-    if not text:
-        return False
     has_half_pair = '[' in text and ']' in text
     has_full_pair = '【' in text and '】' in text
     return has_half_pair or has_full_pair
 
 def contains_paren_pair(text):
-    """检查是否包含圆括号对"""
-    if not text:
-        return False
     has_half_pair = '(' in text and ')' in text
     has_full_pair = '（' in text and '）' in text
     return has_half_pair or has_full_pair
 
 def is_license_warning_line(text):
-    """检查是否是版权警告行"""
     if not text:
         return False
     
-    # 特殊关键词 - 只要包含这些词就直接认为是版权行
     special_keywords = ['文曲大模型', '享有本翻译作品的著作权']
     for keyword in special_keywords:
         if keyword in text:
             return True
     
-    # 普通关键词 - 需要命中多个才认为是版权行
     tokens = ['未经', '许可', '授权', '不得', '请勿', '使用', '版权', '翻唱']
     count = 0
     for token in tokens:
@@ -344,100 +332,33 @@ def is_license_warning_line(text):
             count += 1
     return count >= 3
 
-def extract_plain_text_from_yrc(yrc_content):
-    """从YRC内容中提取纯文本（移除时间标记）- 对应 get.js 的 extractPlainTextFromYrc"""
-    if not yrc_content:
+def filter_lyrics_with_new_rules(lyric_content):
+    """过滤LRC歌词"""
+    if not lyric_content:
         return ''
     
-    plain_text = ''
-    current_pos = 0
-    
-    while current_pos < len(yrc_content):
-        paren_index = yrc_content.find('(', current_pos)
-        
-        if paren_index == -1:
-            plain_text += yrc_content[current_pos:]
-            break
-        
-        plain_text += yrc_content[current_pos:paren_index]
-        
-        close_paren_index = yrc_content.find(')', paren_index)
-        if close_paren_index == -1:
-            break
-        
-        current_pos = close_paren_index + 1
-    
-    return plain_text.strip()
-
-def preprocess_lyric_lines(lyric_content, lyric_type='lrc'):
-    """预处理歌词行（LRC、QRC和YRC共用）- 对应 get.js 的 preprocessLyricLines"""
-    if not lyric_content:
-        return []
-    
-    # 统一的行分割处理
     lines = lyric_content.replace('\r\n', '\n').split('\n')
     
-    # 移除元数据标签行（LRC、QRC和YRC共用）
     filtered_lines = []
     for line in lines:
         trimmed = line.strip()
-        # 跳过元数据行
         if not re.match(r'^\[(ti|ar|al|by|offset|t_time|kana|lang|total):.*\]$', trimmed, re.IGNORECASE):
             filtered_lines.append(line)
     
     parsed_lines = []
+    for line in filtered_lines:
+        match = re.match(r'^(\[[0-9:.]+\])(.*)$', line)
+        if match:
+            parsed_lines.append({
+                'raw': line,
+                'timestamp': match.group(1),
+                'text': match.group(2).strip(),
+                'plainText': re.sub(r'\[.*?\]', '', match.group(2).strip())
+            })
     
-    if lyric_type in ['lrc', 'qrc']:
-        # 解析LRC/QRC格式行（带有时间轴）
-        for line in filtered_lines:
-            # 匹配标准LRC时间轴格式：[00:00.00]文本
-            match = re.match(r'^(\[[0-9:.]+\])(.*)$', line)
-            if match:
-                plain_text = match.group(2).strip()
-                # 移除行内标签（如 [00:01.00]）
-                plain_text = re.sub(r'\[.*?\]', '', plain_text)
-                
-                parsed_lines.append({
-                    'raw': line,
-                    'timestamp': match.group(1),
-                    'text': match.group(2).strip(),
-                    'plainText': plain_text.strip(),
-                    'type': lyric_type
-                })
-            elif line.strip():  # 如果不是时间轴格式但有内容，也添加
-                parsed_lines.append({
-                    'raw': line,
-                    'timestamp': '',
-                    'text': line.strip(),
-                    'plainText': line.strip(),
-                    'type': lyric_type
-                })
+    filtered = list(parsed_lines)
+    removed_colon_plain_texts = []
     
-    elif lyric_type == 'yrc':
-        # 解析YRC格式行：[开始时间,持续时间]内容
-        for line in filtered_lines:
-            match = re.match(r'^\[(\d+),(\d+)\](.*)$', line)
-            if match:
-                start_time = int(match.group(1))
-                duration = int(match.group(2))
-                content = match.group(3).strip()
-                
-                parsed_lines.append({
-                    'raw': line,
-                    'startTime': start_time,
-                    'duration': duration,
-                    'content': content,
-                    'plainText': extract_plain_text_from_yrc(content),
-                    'type': 'yrc'
-                })
-    
-    return parsed_lines
-
-def filter_lyric_lines(parsed_lines):
-    """通用的歌词行过滤函数（LRC、QRC和YRC共用）- 对应 get.js 的 filterLyricLines"""
-    filtered = parsed_lines.copy()
-    
-    # 1) 前三行内：含 '-' 的行直接删除（标题行）
     i = 0
     scan_limit = min(3, len(filtered))
     while i < scan_limit:
@@ -449,13 +370,13 @@ def filter_lyric_lines(parsed_lines):
         else:
             i += 1
     
-    # 2) 前三行内：含冒号的行直接删除
     removed_a2_colon = False
     i = 0
     scan_limit = min(3, len(filtered))
     while i < scan_limit:
         text = filtered[i]['plainText']
         if contains_colon(text):
+            removed_colon_plain_texts.append(text)
             filtered.pop(i)
             removed_a2_colon = True
             scan_limit = min(3, len(filtered))
@@ -463,7 +384,6 @@ def filter_lyric_lines(parsed_lines):
         else:
             i += 1
     
-    # 3) 处理"开头连续冒号行"
     leading = 0
     while leading < len(filtered):
         text = filtered[leading]['plainText']
@@ -474,18 +394,20 @@ def filter_lyric_lines(parsed_lines):
     
     if removed_a2_colon:
         if leading >= 1:
+            for idx in range(leading):
+                removed_colon_plain_texts.append(filtered[idx]['plainText'])
             filtered = filtered[leading:]
     else:
         if leading >= 2:
+            for idx in range(leading):
+                removed_colon_plain_texts.append(filtered[idx]['plainText'])
             filtered = filtered[leading:]
     
-    # 4) 制作行（全局）：删除任意位置出现的"连续 ≥2 行均含冒号"的区间
     new_filtered = []
     i = 0
     while i < len(filtered):
         text = filtered[i]['plainText']
         if contains_colon(text):
-            # 统计这一段连续"含冒号"的长度
             j = i
             while j < len(filtered):
                 tj = filtered[j]['plainText']
@@ -495,10 +417,10 @@ def filter_lyric_lines(parsed_lines):
                     break
             run_len = j - i
             if run_len >= 2:
-                # 丢弃整段 i..<(i+run_len)
+                for k in range(i, j):
+                    removed_colon_plain_texts.append(filtered[k]['plainText'])
                 i = j
             else:
-                # 仅 1 行，保留
                 new_filtered.append(filtered[i])
                 i = j
         else:
@@ -506,10 +428,8 @@ def filter_lyric_lines(parsed_lines):
             i += 1
     filtered = new_filtered
     
-    # 5) 全局删除：凡包含【】或 [] 的行一律删除
     filtered = [line for line in filtered if not contains_bracket_tag(line['plainText'])]
     
-    # 6) 处理开头两行的"圆括号标签"
     i = 0
     scan_limit = min(2, len(filtered))
     while i < scan_limit:
@@ -521,80 +441,18 @@ def filter_lyric_lines(parsed_lines):
         else:
             i += 1
     
-    # 7) 全局删除：版权/授权/禁止类提示语
     filtered = [line for line in filtered if not is_license_warning_line(line['plainText'])]
     
-    # 8) 额外的清理步骤
-    new_filtered = []
-    for line in filtered:
-        text = line['plainText']
-        
-        # 移除空行
-        if text == '':
-            continue
-        
-        # 移除只包含"//"的行
-        if text == '//':
-            continue
-        
-        # 对于LRC/QRC格式，移除只包含时间轴后面只有"//"的行
-        if line['type'] in ['lrc', 'qrc']:
-            if re.match(r'^\/\/\s*$', text):
-                continue
-            
-            # 如果有时间轴，检查是否只有"//"
-            if 'timestamp' in line and line['timestamp']:
-                if re.match(r'^\[\d+:\d+(\.\d+)?\]\s*\/\/\s*$', line['raw']):
-                    continue
-                
-                # 移除只有时间轴的空行
-                if re.match(r'^\[\d+:\d+(\.\d+)?\]\s*$', line['raw']):
-                    continue
-        
-        new_filtered.append(line)
+    filtered = [line for line in filtered if not (
+        line['plainText'] == '' or
+        line['plainText'] == '//' or
+        re.match(r'^\/\/\s*$', line['plainText']) or
+        re.match(r'^\[\d+:\d+(\.\d+)?\]\s*\/\/\s*$', line['raw']) or
+        re.match(r'^\[\d+:\d+(\.\d+)?\]\s*$', line['raw'])
+    )]
     
-    return new_filtered
-
-def unified_filter_lyrics(lyric_content, lyric_type='lrc'):
-    """统一的歌词过滤函数 - 对应 get.js 的 filterLyrics"""
-    if not lyric_content:
-        return ''
-    
-    # 基础预处理：分割行和移除元数据
-    parsed_lines = preprocess_lyric_lines(lyric_content, lyric_type)
-    
-    # 使用通用的过滤逻辑
-    filtered = filter_lyric_lines(parsed_lines)
-    
-    # 重新组合成对应格式
-    result_lines = []
-    for line in filtered:
-        if lyric_type in ['lrc', 'qrc'] and 'timestamp' in line:
-            # 保持原始格式，但移除可能被过滤的内容
-            result_lines.append(line['raw'])
-        elif lyric_type == 'yrc':
-            result_lines.append(line['raw'])
-        else:
-            # 对于纯文本，使用原始文本
-            result_lines.append(line['text'])
-    
-    result = '\n'.join(result_lines)
+    result = '\n'.join([line['raw'] for line in filtered])
     return result
-
-# 兼容旧函数名
-def filter_lyrics_with_new_rules(lyric_content):
-    """过滤LRC歌词（兼容旧函数名）"""
-    return unified_filter_lyrics(lyric_content, 'lrc')
-
-def filter_qrc_lyrics(lyric_content):
-    """过滤QRC逐字歌词"""
-    # 检查是否是LRC格式（有时间轴）
-    if lyric_content and '[' in lyric_content and ']' in lyric_content and re.search(r'\[\d+:\d+', lyric_content):
-        # 如果是LRC格式，使用qrc类型过滤
-        return unified_filter_lyrics(lyric_content, 'qrc')
-    
-    # 对于纯文本QRC格式，也使用统一过滤
-    return unified_filter_lyrics(lyric_content, 'qrc')
 
 # ================ QQ 音乐解密核心 ================
 QQ_KEY = b'!@#)(*$%123ZXC!@!@#)(NHL'
@@ -915,8 +773,8 @@ def get_lrc_by_mid(mid):
     try:
         with urllib.request.urlopen(req, timeout=10) as response:
             data = response.read().decode('utf-8')
+            print(f"LRC API原始响应（前500字符）: {data[:500]}")
             
-            # 移除JSONP包装
             if data.startswith(callback):
                 data = data.replace(callback + '(', '').rsplit(')', 1)[0]
             
@@ -926,8 +784,8 @@ def get_lrc_by_mid(mid):
             if lyric_data.get('lyric'):
                 try:
                     decoded_lyric = base64.b64decode(lyric_data['lyric']).decode('utf-8')
-                    # 使用统一过滤函数
-                    result['lyric'] = unified_filter_lyrics(decoded_lyric, 'lrc')
+                    # 关键：应用过滤函数
+                    result['lyric'] = filter_lyrics_with_new_rules(decoded_lyric)
                     print(f"LRC歌词过滤后长度: {len(result['lyric'])}")
                 except Exception as e:
                     print(f"解码LRC歌词失败: {e}")
@@ -936,8 +794,8 @@ def get_lrc_by_mid(mid):
             if lyric_data.get('trans'):
                 try:
                     decoded_trans = base64.b64decode(lyric_data['trans']).decode('utf-8')
-                    # 使用统一过滤函数
-                    result['trans'] = unified_filter_lyrics(decoded_trans, 'lrc')
+                    # 关键：应用过滤函数
+                    result['trans'] = filter_lyrics_with_new_rules(decoded_trans)
                     print(f"LRC翻译过滤后长度: {len(result['trans'])}")
                 except Exception as e:
                     print(f"解码LRC翻译失败: {e}")
@@ -952,7 +810,7 @@ def get_lrc_by_mid(mid):
         return {'lyric': '', 'trans': ''}
 
 def get_qrc_by_id(musicid):
-    """获取QRC逐字歌词（应用统一过滤）"""
+    """获取QRC逐字歌词（从第二个版本）"""
     params = {
         'version': '15',
         'miniversion': '82',
@@ -982,25 +840,9 @@ def get_qrc_by_id(musicid):
             # 解析XML并解密歌词
             result = parse_xml_content(xml_content)
             
-            # 对QRC歌词应用统一过滤
-            if result['lyrics']:
-                # QRC歌词通常有时间轴，使用qrc类型过滤
-                result['lyrics'] = unified_filter_lyrics(result['lyrics'], 'qrc')
-                print(f"QRC歌词过滤后长度: {len(result['lyrics'])}")
-            
-            if result['roma']:
-                # 罗马音通常也有时间轴
-                result['roma'] = unified_filter_lyrics(result['roma'], 'qrc')
-                print(f"QRC罗马音过滤后长度: {len(result['roma'])}")
-            
-            if result['trans']:
-                # QRC的翻译可能也有时间轴，或者可能是纯文本
-                result['trans'] = unified_filter_lyrics(result['trans'], 'qrc')
-                print(f"QRC翻译过滤后长度: {len(result['trans'])}")
-            
             return result
     except Exception as e:
-        print(f"获取QRC歌词失败: {e}")
+        print(f"获取歌词失败: {e}")
         import traceback
         traceback.print_exc()
         return {'lyrics': '', 'trans': '', 'roma': ''}
@@ -1011,7 +853,7 @@ def index():
     return json_response({
         'name': 'QQ音乐歌词解密API - 完整版',
         'version': '4.0.0',
-        'description': '完整支持LRC逐行歌词、QRC逐字歌词、翻译和罗马音，使用统一过滤系统',
+        'description': '完整支持LRC逐行歌词、QRC逐字歌词、翻译和罗马音',
         'endpoints': {
             '/api/lyrics?id=<musicid>': '通过musicid获取所有歌词',
             '/api/lyrics?mid=<songmid>': '通过songmid获取所有歌词',
@@ -1020,8 +862,7 @@ def index():
         },
         'note': 'id和mid参数二选一，id优先',
         'example_id': '/api/lyrics?id=213836590',
-        'example_mid': '/api/lyrics?mid=0009vzel3OWyod',
-        'filtering': '使用与get.js相同的统一歌词过滤系统'
+        'example_mid': '/api/lyrics?mid=0009vzel3OWyod'
     })
 
 @app.route('/api/lyrics', methods=['GET'])
@@ -1043,7 +884,6 @@ def get_lyrics():
         final_mid = None
         final_musicid = None
         
-        # 优先使用id
         if musicid:
             song_info = get_song_by_id(musicid)
             if song_info and 'data' in song_info and song_info['data']:
@@ -1075,7 +915,6 @@ def get_lyrics():
         if song_data.get('singer') and len(song_data['singer']) > 0:
             singer_name = song_data['singer'][0].get('name', '')
         
-        # 获取LRC歌词（需要mid）
         lrc_result = {'lyric': '', 'trans': ''}
         if final_mid:
             print(f"获取LRC歌词，mid: {final_mid}")
@@ -1083,7 +922,6 @@ def get_lyrics():
         else:
             print("没有mid，跳过LRC歌词获取")
         
-        # 获取QRC歌词（需要musicid）
         qrc_result = {'lyrics': '', 'trans': '', 'roma': ''}
         if final_musicid:
             print(f"获取QRC歌词，musicid: {final_musicid}")
@@ -1091,7 +929,6 @@ def get_lyrics():
         else:
             print("没有musicid，跳过QRC歌词获取")
         
-        # 如果都没有歌词，返回404
         if (not lrc_result.get('lyric') and not lrc_result.get('trans') and
             not qrc_result.get('lyrics') and not qrc_result.get('roma')):
             return json_response({
@@ -1127,14 +964,13 @@ def get_lyrics():
                 'singer': singer_name
             },
             'lyric': {
-                'lrc': lrc_lyric,       # LRC逐行歌词
-                'qrc': qrc_lyric,      # QRC逐字歌词（对应 get.js 的 yrcLyrics）
-                'trans': trans,        # 翻译歌词（优先LRC翻译）
-                'roma': qrc_roma       # 罗马音
+                'lrc': lrc_lyric,
+                'qrc': qrc_lyric,
+                'trans': trans,
+                'roma': qrc_roma
             },
             'has_lrc': bool(lrc_lyric or lrc_trans),
-            'has_qrc': bool(qrc_lyric or qrc_roma),
-            'filtering': '歌词已使用与get.js相同的统一过滤系统处理'
+            'has_qrc': bool(qrc_lyric or qrc_roma)
         }
         
         return json_response(response_data)
@@ -1199,7 +1035,6 @@ def debug():
             'traceback': traceback.format_exc()
         }, 500)
 
-# 用于Vercel
 application = app
 
 if __name__ == '__main__':
